@@ -2,5 +2,6 @@ target/
 **/*.rs.bk
 
 qemu-*
+trace-*
 *.so
 *.o
