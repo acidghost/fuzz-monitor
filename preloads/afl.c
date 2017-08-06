@@ -11,8 +11,13 @@
 #include <unistd.h>
 
 
+#define likely(x)       __builtin_expect((x),1)
+#define unlikely(x)     __builtin_expect((x),0)
+
+
 #define PATH_NEEDLE "cur_input"
 #define LOG_FILENAME "actions.log"
+#define SKIP_N 1000
 
 static pid_t pid;
 static int fuzzer_out_fd;
@@ -20,6 +25,7 @@ static FILE *log_file;
 static long start_time_ms;
 static void *context;
 static void *sender;
+static unsigned long counter = 0;
 
 static inline void set_log_file(void)
 {
@@ -58,7 +64,7 @@ static inline int __open(open_fn_t open_fn, const char *path, int flags, va_list
 int open(const char *path, int flags, ...)
 {
 	static open_fn_t real_open;
-	if (!real_open)
+	if (unlikely(!real_open))
 		real_open = dlsym(RTLD_NEXT, "open");
 
 	va_list args;
@@ -77,7 +83,7 @@ int open(const char *path, int flags, ...)
 int open64(const char *path, int flags, ...)
 {
 	static open_fn_t real_open64;
-	if (!real_open64)
+	if (unlikely(!real_open64))
 		real_open64 = dlsym(RTLD_NEXT, "open64");
 
 	va_list args;
@@ -96,11 +102,15 @@ int open64(const char *path, int flags, ...)
 ssize_t write(int fd, const void *buf, size_t count)
 {
   static ssize_t (*real_write)(int, const void *, size_t);
-  if (!real_write)
+  if (unlikely(!real_write))
     real_write = dlsym(RTLD_NEXT, "write");
 
   if (fd == fuzzer_out_fd) {
-    zmq_send(sender, buf, count, 0);
+    counter++;
+    if (unlikely(counter > SKIP_N)) {
+      zmq_send(sender, buf, count, 0);
+      counter = 0;
+    }
   }
 
   return real_write(fd, buf, count);
