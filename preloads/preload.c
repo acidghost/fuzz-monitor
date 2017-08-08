@@ -26,7 +26,6 @@
 #define _LOG_FILENAME(x) STR(x) ".log"
 #define LOG_FILENAME _LOG_FILENAME(FUZZ)
 #define SKIP_N 1000
-// #define DEBUG
 
 static pid_t pid;
 static int fuzzer_out_fd;
@@ -36,16 +35,7 @@ static void *context;
 static void *sender;
 static unsigned long counter = 0;
 
-static inline void set_log_file(void)
-{
-  log_file = fopen(LOG_FILENAME, "w");
-  if (!log_file) {
-    fprintf(stderr, "Unable to open " LOG_FILENAME "\n");
-    exit(EXIT_FAILURE);
-  }
-}
-
-static inline long gettimems(void)
+static inline long get_time_ms(void)
 {
   struct timespec spec;
   clock_gettime(CLOCK_MONOTONIC, &spec);
@@ -54,63 +44,38 @@ static inline long gettimems(void)
 
 static inline void log_action(char *str)
 {
-  long ms = gettimems() - start_time_ms;
+  long ms = get_time_ms() - start_time_ms;
   fprintf(log_file, "%ld\t%s\n", ms, str);
 }
 
-typedef int (*open_fn_t)(const char *, int, ...);
 
-static inline int __open(open_fn_t open_fn, const char *path, int flags, va_list args)
-{
-  if (__OPEN_NEEDS_MODE(flags)) {
-    mode_t mode = va_arg(args, mode_t);
-    return open_fn(path, flags, mode);
-  } else {
-    return open_fn(path, flags);
-  }
+#define MAKE_OPEN(open)                                                         \
+int open(const char *path, int flags, ...)                                      \
+{                                                                               \
+  static int (*real_##open)(const char *, int, ...);                            \
+  if (unlikely(!real_##open))                                                   \
+    real_##open = dlsym(RTLD_NEXT, STR(open));                                  \
+                                                                                \
+  va_list args;                                                                 \
+  va_start(args, flags);                                                        \
+  int ret;                                                                      \
+  if (__OPEN_NEEDS_MODE(flags)) {                                               \
+    mode_t mode = va_arg(args, mode_t);                                         \
+    ret = real_##open(path, flags, mode);                                       \
+  } else {                                                                      \
+    ret = real_##open(path, flags);                                             \
+  }                                                                             \
+  va_end(args);                                                                 \
+                                                                                \
+  if (strstr(path, PATH_NEEDLE)) {                                              \
+    fuzzer_out_fd = ret;                                                        \
+  }                                                                             \
+                                                                                \
+  return ret;                                                                   \
 }
 
-int open(const char *path, int flags, ...)
-{
-  static open_fn_t real_open;
-  if (unlikely(!real_open))
-    real_open = dlsym(RTLD_NEXT, "open");
-
-  va_list args;
-  va_start(args, flags);
-  int ret = __open(real_open, path, flags, args);
-  va_end(args);
-
-  if (strstr(path, PATH_NEEDLE)) {
-    fuzzer_out_fd = ret;
-#ifdef DEBUG
-    log_action("open");
-#endif
-  }
-
-  return ret;
-}
-
-int open64(const char *path, int flags, ...)
-{
-  static open_fn_t real_open64;
-  if (unlikely(!real_open64))
-    real_open64 = dlsym(RTLD_NEXT, "open64");
-
-  va_list args;
-  va_start(args, flags);
-  int ret = __open(real_open64, path, flags, args);
-  va_end(args);
-
-  if (strstr(path, PATH_NEEDLE)) {
-    fuzzer_out_fd = ret;
-#ifdef DEBUG
-    log_action("open64");
-#endif
-  }
-
-  return ret;
-}
+MAKE_OPEN(open);
+MAKE_OPEN(open64);
 
 ssize_t write(int fd, const void *buf, size_t count)
 {
@@ -131,10 +96,14 @@ ssize_t write(int fd, const void *buf, size_t count)
 
 __attribute__((constructor)) static void before_main(void)
 {
-  start_time_ms = gettimems();
+  start_time_ms = get_time_ms();
   pid = getpid();
 
-  set_log_file();
+  log_file = fopen(LOG_FILENAME, "w");
+  if (!log_file) {
+    fprintf(stderr, "Unable to open " LOG_FILENAME "\n");
+    exit(EXIT_FAILURE);
+  }
   log_action("open_log");
 
   context = zmq_ctx_new();
