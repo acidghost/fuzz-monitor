@@ -1,9 +1,13 @@
-libs := afl.so
+CC = gcc
+CFLAGS = -Wall -fPIC -shared -O3
+LDLIBS = -ldl -lm -lzmq
 
-all: $(libs)
+preloads := afl.so hongg.so
 
-%.so: %.c
-	$(CC) -Wall -fPIC -shared -o $@ $< -ldl -lm -lzmq
+all: $(preloads)
+
+%.so: preload.c
+	$(CC) $(CFLAGS) -o $@ $< -D `echo $* | tr a-z A-Z` -D FUZZ=$* $(LDLIBS)
 
 clean:
-	rm -rf $(libs)
+	rm -rf $(preloads)
