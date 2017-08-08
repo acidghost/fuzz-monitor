@@ -1,75 +1,90 @@
 extern crate zmq;
 
-use std::process::{Command, Stdio};
-use std::fs;
-use std::io::Write;
-use std::u64;
+use std::time::Instant;
+use std::env::args;
+use std::fmt;
+
+mod qemu;
+mod perf;
 
 
-const QEMU: &str = "./qemu-2.9.0/x86_64-linux-user/qemu-x86_64";
-const SUT: &str = "../LAVA-M/bin/base64";
-const QEMU_ARGS: [&str; 4] = ["-trace", "events=./events", SUT, "-d"];
+enum MonitoringTool { Perf, Qemu }
 
-const QEMU_TRACE_PY: &str = "./qemu-2.9.0/scripts/simpletrace.py";
-const QEMU_TRACE_ARG: &str = "./qemu-2.9.0/trace-events-all";
-
-type TraceLine = u64;
-
-fn trace(bytes: Vec<u8>) -> u32 {
-    let mut qemu_proc = Command::new(QEMU).args(&QEMU_ARGS)
-        .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null())
-        .spawn().expect("failed to start qemu");
-
-    {
-        let stdin = qemu_proc.stdin.as_mut().expect("failed to get stdin");
-        stdin.write_all(bytes.as_slice()).expect("failed to write to stdin");
-    }
-
-    qemu_proc.wait().expect("failed to wait for qemu");
-    qemu_proc.id()
-}
-
-fn parse_trace(trace_filename: &String) -> Vec<TraceLine> {
-    let trace_out = Command::new(QEMU_TRACE_PY).arg(QEMU_TRACE_ARG).arg(trace_filename)
-        .output().expect("failed to run trace parser");
-    let trace_out_str = String::from_utf8(trace_out.stdout).unwrap();
-
-    let mut trace_lines: Vec<TraceLine> = Vec::new();
-    for line in trace_out_str.lines() {
-        for part in line.split(" ") {
-            if part.starts_with("pc=0x") {
-                trace_lines.push(u64::from_str_radix(&part[5..], 16).unwrap())
-            }
+impl fmt::Display for MonitoringTool {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            &MonitoringTool::Qemu => write!(f, "QEMU"),
+            &MonitoringTool::Perf => write!(f, "PERF")
         }
     }
-
-    trace_lines
 }
 
-fn main() {
-    println!("[+] starting fuzz-monitor");
+struct FuzzMonitor {
+    tool: MonitoringTool,
+    sut: Vec<String>
+}
+
+impl fmt::Display for FuzzMonitor {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{} {}", self.tool, self.sut.join(" "))
+    }
+}
+
+fn parse_args<'a>() -> Result<FuzzMonitor, &'a str> {
+    let mut options = FuzzMonitor { tool: MonitoringTool::Perf, sut: vec![] };
+    let mut do_sut = false;
+    for arg in args() {
+        match arg.as_str() {
+            x if do_sut == true => options.sut.push(x.to_string()),
+            "-p" => options.tool = MonitoringTool::Perf,
+            "-q" => options.tool = MonitoringTool::Qemu,
+            "--" => do_sut = true,
+            _ => ()
+        }
+    }
+    if options.sut.is_empty() {
+        Err("usage: fuzz-monitor [-p|-q] -- command [args]")
+    } else {
+        Ok(options)
+    }
+}
+
+fn start_monitoring(options: FuzzMonitor) {
+    println!("[+] starting fuzz-monitor ({})", options);
+
     let context = zmq::Context::new();
-    let receiver = context.socket(zmq::PULL).unwrap();
-    assert!(receiver.bind("tcp://*:5558").is_ok());
+    let receiver = context.socket(zmq::PULL).expect("failed to create zmq context");
+    receiver.bind("tcp://*:5558").expect("failed to bind to tcp://*:5558");
     println!("[+] listening...");
 
     let mut max_count = 0;
+    let sut_s = options.sut.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
+    let sut = &sut_s.as_slice();
 
     loop {
         let bytes = receiver.recv_bytes(0).unwrap();
-        let qemu_pid = trace(bytes);
 
-        let filename = format!("./trace-{}", qemu_pid);
-        let trace_lines = parse_trace(&filename);
-        // TODO: do something useful with trace lines...
-        let count = trace_lines.len();
+        let now = Instant::now();
+        let count = match options.tool {
+            MonitoringTool::Qemu => qemu::trace(bytes, sut).len() as u64,
+            MonitoringTool::Perf => perf::trace(bytes, sut)
+        };
+        let elapsed = now.elapsed();
+
         let mut new_max = false;
         if count > max_count {
             max_count = count;
             new_max = true;
         }
-        println!("[{}] computed {:?} (max {:?})", if new_max {'!'} else {'?'}, count, max_count);
 
-        fs::remove_file(&filename).expect(format!("unable to remove {:?}", filename).as_str());
+        let ms = elapsed.as_secs() * 1000 + (elapsed.subsec_nanos() as u64 / 1000000);
+        println!("[{}] {} (max {}, in: {}ms)", if new_max {'!'} else {'?'}, count, max_count, ms);
+    }
+}
+
+fn main() {
+    match parse_args() {
+        Ok(opt) => start_monitoring(opt),
+        Err(e) => println!("{}", e)
     }
 }
