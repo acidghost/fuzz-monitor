@@ -89,17 +89,14 @@ static void do_parent(pid_t child_pid)
   int perf_fd = perf_event_open(&pe, child_pid, -1, -1, PERF_FLAG_FD_CLOEXEC);
   if (perf_fd == -1) {
     PLOG_F("perf_event_open() failed");
-    kill(child_pid, 9);
-    exit(EXIT_FAILURE);
+    goto bail_perf_open;
   }
 
   void *mmap_buf =
     mmap(NULL, PERF_MAP_SZ + getpagesize(), PROT_READ | PROT_WRITE, MAP_SHARED, perf_fd, 0);
   if (mmap_buf == MAP_FAILED) {
     PLOG_F("failed mmap perf buffer, sz=%zu", (size_t) PERF_MAP_SZ + getpagesize());
-    close(perf_fd);
-    kill(child_pid, 9);
-    exit(EXIT_FAILURE);
+    goto bail_perf_buf;
   }
 
   struct perf_event_mmap_page *pem = (struct perf_event_mmap_page *)mmap_buf;
@@ -107,11 +104,8 @@ static void do_parent(pid_t child_pid)
   pem->aux_size = PERF_AUX_SZ;
   void *mmap_aux = mmap(NULL, pem->aux_size, PROT_READ, MAP_SHARED, perf_fd, pem->aux_offset);
   if (mmap_aux == MAP_FAILED) {
-    munmap(mmap_buf, PERF_MAP_SZ + getpagesize());
     PLOG_F("failed mmap perf aux, sz=%zu", (size_t) PERF_AUX_SZ);
-    close(perf_fd);
-    kill(child_pid, 9);
-    exit(EXIT_FAILURE);
+    goto bail_perf_aux;
   }
 
   ioctl(perf_fd, PERF_EVENT_IOC_ENABLE, 0);
@@ -119,15 +113,22 @@ static void do_parent(pid_t child_pid)
   int status;
   if (waitpid(child_pid, &status, 0) == -1) {
     PLOG_F("failed waiting for child PID=%lu", child_pid);
-    munmap(mmap_aux, PERF_AUX_SZ);
-    munmap(mmap_buf, PERF_MAP_SZ + getpagesize());
-    close(perf_fd);
-    kill(child_pid, 9);
-    exit(EXIT_FAILURE);
+    goto bail_perf_wait;
   }
   LOG_I("PID=%lu finished with status %d", child_pid, status);
 
   analyze_bts(perf_fd, pem, mmap_aux);
+  return;
+
+bail_perf_wait:
+  munmap(mmap_aux, PERF_AUX_SZ);
+bail_perf_aux:
+  munmap(mmap_buf, PERF_MAP_SZ + getpagesize());
+bail_perf_buf:
+  close(perf_fd);
+bail_perf_open:
+  kill(child_pid, 9);
+  exit(EXIT_FAILURE);
 }
 
 
