@@ -157,7 +157,7 @@ int main(int argc, char const **argv)
     return EXIT_SUCCESS;
   }
 
-  if (argc > 2 && argv[1][0] == 'x') {
+  if (argc > 2 && argv[1][0] == 'x' && argv[1][1] == '\0') {
     human_readable = false;
     log_level = MACHINE;
   }
