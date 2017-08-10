@@ -9,7 +9,7 @@
 #include <unistd.h>
 
 
-void _log(enum llevel_t ll, const char *fn, int ln, bool perr, const char *fmt, ...)
+void log_log(enum llevel_t ll, const char *fn, int ln, bool perr, const char *fmt, ...)
 {
   char strerr[512];
   if (perr == true) {
