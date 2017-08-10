@@ -21,6 +21,7 @@ void log_log(enum llevel_t ll, const char *fn, int ln, bool perr, const char *fm
     const bool print_funcline;
   };
   static const struct ll_t log_levels[] = {
+    {NULL, NULL, false},
     {"F", "\033[7;35m", true},
     {"E", "\033[1;31m", true},
     {"W", "\033[0;33m", true},
@@ -28,7 +29,9 @@ void log_log(enum llevel_t ll, const char *fn, int ln, bool perr, const char *fm
     {"D", "\033[0;4m", true},
   };
 
-  dprintf(STDOUT_FILENO, "[%s] ", log_levels[ll].descr);
+  if (log_levels[ll].descr) {
+    dprintf(STDOUT_FILENO, "[%s] ", log_levels[ll].descr);
+  }
 
   if (log_levels[ll].print_funcline) {
     dprintf(STDOUT_FILENO, "%s():%d ", fn, ln);

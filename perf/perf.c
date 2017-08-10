@@ -22,6 +22,7 @@
 
 enum llevel_t log_level = INFO;
 int32_t perf_bts_type = -1;
+bool human_readable = true;
 
 
 static inline long perf_event_open(struct perf_event_attr *hw_event, pid_t pid,
@@ -64,13 +65,14 @@ static void analyze_bts(int perf_fd, struct perf_event_mmap_page *pem, void *mma
   };
 
   uint64_t aux_head = pem->aux_head;
-  struct bts_branch *br = (struct bts_branch *) mmap_aux;
   uint64_t counter = 0;
+  struct bts_branch *br = (struct bts_branch *) mmap_aux;
   for (; br < ((struct bts_branch *)(mmap_aux + aux_head)); br++) {
     if (unlikely(br->from > 0xFFFFFFFF00000000) || unlikely(br->to > 0xFFFFFFFF00000000)) {
       continue;
     }
     LOG_D("[%" PRIu64 "] 0x%x -> 0x%x", counter, br->from, br->to);
+    LOG_M("branch,%" PRIu64 ",%" PRIu64, br->from, br->to);
     counter++;
   }
 
@@ -142,7 +144,8 @@ static void do_child(char const **argv)
   dup2(null_fd, STDOUT_FILENO);
   dup2(null_fd, STDERR_FILENO);
 
-  execv(argv[1], (char *const *) &argv[1]);
+  size_t idx = human_readable ? 1 : 2;
+  execv(argv[idx], (char *const *) &argv[idx]);
   exit(EXIT_FAILURE);
 }
 
@@ -150,8 +153,13 @@ static void do_child(char const **argv)
 int main(int argc, char const **argv)
 {
   if (argc < 2) {
-    LOG_I("usage: perf command [args]");
+    LOG_I("usage: %s [x] command [args]", argv[0]);
     return EXIT_SUCCESS;
+  }
+
+  if (argc > 2 && argv[1][0] == 'x') {
+    human_readable = false;
+    log_level = MACHINE;
   }
 
   LOG_I("Starting perf tool...");
