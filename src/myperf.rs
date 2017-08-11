@@ -1,6 +1,8 @@
 extern crate libc;
 
 use std::ffi::CString;
+use std::process::{Command, Stdio};
+use std::io::Write;
 
 
 #[repr(C)]
@@ -29,6 +31,7 @@ extern "C" {
 }
 
 
+#[allow(dead_code)]
 pub fn trace(bytes: Vec<u8>, argv: &[&str], bts_start: *mut *mut BTSBranch, count: *mut u64)
     -> Result<i32, i32> {
     let args: Vec<*const libc::c_char> = argv.iter().map(|arg|
@@ -42,4 +45,35 @@ pub fn trace(bytes: Vec<u8>, argv: &[&str], bts_start: *mut *mut BTSBranch, coun
 
     if ret < 0 { Err(ret) }
     else { Ok(ret) }
+}
+
+pub fn trace2(bytes: Vec<u8>, sut: &[&str]) -> Vec<BTSBranch> {
+    let mut perf_proc = Command::new("./perf/perf").args(&["x"]).args(sut)
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
+        .spawn().expect("failed to start perf");
+
+    {
+        let stdin = perf_proc.stdin.as_mut().expect("failed to get stdin");
+        stdin.write_all(bytes.as_slice()).expect("failed to write to stdin");
+    }
+
+    let perf_out = perf_proc.wait_with_output().expect("failed to wait for perf");
+    let mut branches: Vec<BTSBranch> = vec![];
+    let perf_out_str = String::from_utf8_lossy(perf_out.stdout.as_slice()).into_owned();
+
+    for line in perf_out_str.lines() {
+        if line.starts_with("branch") {
+            let mut splitted = line.split(",");
+            splitted.next();
+            let splitted_fst = splitted.next().expect("no second element");
+            let splitted_snd = splitted.next().expect("no third element");
+            branches.push(BTSBranch {
+                from: u64::from_str_radix(splitted_fst, 10).expect("failed parsing from"),
+                to: u64::from_str_radix(splitted_snd, 10).expect("failed parsing to"),
+                misc: 0
+            });
+        }
+    }
+
+    branches
 }

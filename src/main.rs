@@ -3,6 +3,7 @@ extern crate zmq;
 use std::time::Instant;
 use std::env::args;
 use std::fmt;
+use std::process::Command;
 
 mod qemu;
 mod perf;
@@ -70,18 +71,27 @@ impl FuzzMonitor {
         let sut_s = self.sut.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
         let sut = &sut_s.as_slice();
 
+        let (sec_start, sec_end) = self.get_section_address(".text").unwrap();
+        println!("[+] .text section bounds: 0x{:x} - 0x{:x}", sec_start, sec_end);
+
         loop {
             let bytes = receiver.recv_bytes(0).unwrap();
+            // println!("[+] got {} bytes", bytes.len());
 
             let now = Instant::now();
             let count = match self.tool {
                 MonitoringTool::Qemu => qemu::trace(bytes, sut).len() as u64,
                 MonitoringTool::Perf => perf::trace(bytes, sut),
                 MonitoringTool::CPerf => {
-                    let mut bts_start: *mut myperf::BTSBranch = &mut myperf::BTSBranch { from: 0, to: 0, misc: 0 };
-                    let mut count: u64 = 0;
-                    myperf::trace(bytes, sut, &mut bts_start, &mut count).unwrap();
-                    count
+                    // let mut bts_start: *mut myperf::BTSBranch = &mut myperf::BTSBranch { from: 0, to: 0, misc: 0 };
+                    // let mut count: u64 = 0;
+                    // myperf::trace(bytes, sut, &mut bts_start, &mut count).unwrap();
+                    // count
+                    let trace_raw = myperf::trace2(bytes, sut);
+                    let trace: Vec<_> = trace_raw.iter().filter(|bts|
+                        (bts.from >= sec_start && bts.from <= sec_end) ||
+                        (bts.to >= sec_start && bts.to <= sec_end)).collect();
+                    trace.len() as u64
                 }
             };
             let elapsed = now.elapsed();
@@ -95,6 +105,27 @@ impl FuzzMonitor {
             let ms = elapsed.as_secs() * 1000 + (elapsed.subsec_nanos() as u64 / 1000000);
             println!("[{}] {} (max {}, in: {}ms)", if new_max {'!'} else {'?'}, count, max_count, ms);
         }
+    }
+
+    fn get_section_address(&self, section: &str) -> Option<(u64, u64)> {
+        let sut = self.sut.get(0).unwrap();
+        let out = Command::new("./section_address.sh").arg(sut).arg(section)
+            .output().expect("failed to run section_address.sh");
+
+        if !out.status.success() {
+            return None;
+        }
+
+        let out_str = String::from_utf8_lossy(out.stdout.as_slice()).into_owned();
+        let mut lines = out_str.lines();
+        let mut line_split = lines.next().unwrap().split(" ");
+        line_split.next();
+        let splitted_fst = line_split.next().unwrap();
+        let splitted_snd = line_split.next().unwrap();
+        Some((
+            u64::from_str_radix(splitted_fst, 10).expect("failed parsing start address"),
+            u64::from_str_radix(splitted_snd, 10).expect("failed parsing end address")
+        ))
     }
 }
 
