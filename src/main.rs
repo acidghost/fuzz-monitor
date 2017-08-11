@@ -80,7 +80,7 @@ impl FuzzMonitor {
                 MonitoringTool::CPerf => {
                     let mut bts_start: *mut myperf::BTSBranch = &mut myperf::BTSBranch { from: 0, to: 0, misc: 0 };
                     let mut count: u64 = 0;
-                    myperf::monitor_api(bytes, sut, &mut bts_start, &mut count).unwrap();
+                    myperf::trace(bytes, sut, &mut bts_start, &mut count).unwrap();
                     count
                 }
             };

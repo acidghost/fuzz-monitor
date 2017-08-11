@@ -29,7 +29,7 @@ extern "C" {
 }
 
 
-pub fn monitor_api(bytes: Vec<u8>, argv: &[&str], bts_start: *mut *mut BTSBranch, count: *mut u64)
+pub fn trace(bytes: Vec<u8>, argv: &[&str], bts_start: *mut *mut BTSBranch, count: *mut u64)
     -> Result<i32, i32> {
     let args: Vec<*const libc::c_char> = argv.iter().map(|arg|
         CString::new(arg.to_string()).unwrap().as_ptr()
