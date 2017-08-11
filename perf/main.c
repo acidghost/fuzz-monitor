@@ -4,6 +4,7 @@
 
 #include <stdbool.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <inttypes.h>
 #include <unistd.h>
 
@@ -25,6 +26,9 @@ int main(int argc, char const **argv)
     LOG_I("Starting perf tool...");
     perf_monitor(&argv[1]);
   } else {
+    perf_monitor(&argv[2]);
+    fflush(stdout);
+    /* TODO: fixme...
     uint8_t data[512];
     ssize_t read_sz = read(STDIN_FILENO, data, 511);
     if (read_sz < 0) {
@@ -45,5 +49,6 @@ int main(int argc, char const **argv)
       uint64_t i = br - bts_start;
       LOG_M("branch,%"PRIu64"/%"PRIu64",%" PRIu64 ",%" PRIu64, i, count, br->from, br->to);
     }
+    */
   }
 }

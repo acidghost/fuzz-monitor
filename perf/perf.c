@@ -146,8 +146,8 @@ static int32_t perf_child(char const **argv)
     PLOG_F("failed to open /dev/null");
     return PERF_FAILURE;
   }
-  // dup2(null_fd, STDOUT_FILENO);
-  // dup2(null_fd, STDERR_FILENO);
+  dup2(null_fd, STDOUT_FILENO);
+  dup2(null_fd, STDERR_FILENO);
 
   execv(argv[0], (char *const *) &argv[0]);
   return PERF_FAILURE;
