@@ -36,8 +36,7 @@ pub fn monitor_api(bytes: Vec<u8>, argv: &[&str], bts_start: *mut *mut BTSBranch
     ).collect();
 
     let ret = unsafe {
-        log_level = llevel_t::DEBUG;
-        // println!("writing {:?} bytes", bytes.len());
+        log_level = llevel_t::MACHINE;
         perf_monitor_api(bytes.as_slice().as_ptr(), bytes.len(), args.as_slice().as_ptr(), bts_start, count)
     };
 
