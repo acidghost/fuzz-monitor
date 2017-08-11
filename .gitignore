@@ -5,5 +5,6 @@ qemu-*
 trace-*
 *.so
 *.o
+*.a
 
 perf/perf

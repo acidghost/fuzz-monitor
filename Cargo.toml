@@ -2,6 +2,8 @@
 name = "fuzz-monitor"
 version = "0.1.0"
 authors = ["Andrea Jemmett <andreajemmett@gmail.com>"]
+build = "build.rs"
 
 [dependencies]
 zmq = "0.8"
+libc = "0.2"

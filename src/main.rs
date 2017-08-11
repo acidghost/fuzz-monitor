@@ -6,15 +6,17 @@ use std::fmt;
 
 mod qemu;
 mod perf;
+mod myperf;
 
 
-enum MonitoringTool { Perf, Qemu }
+enum MonitoringTool { Perf, Qemu, CPerf }
 
 impl fmt::Display for MonitoringTool {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             &MonitoringTool::Qemu => write!(f, "QEMU"),
-            &MonitoringTool::Perf => write!(f, "PERF")
+            &MonitoringTool::Perf => write!(f, "PERF"),
+            &MonitoringTool::CPerf => write!(f, "CPERF")
         }
     }
 }
@@ -43,12 +45,13 @@ impl FuzzMonitor {
                 x if do_sut == true => options.sut.push(x.to_string()),
                 "-p" => options.tool = MonitoringTool::Perf,
                 "-q" => options.tool = MonitoringTool::Qemu,
+                "-c" => options.tool = MonitoringTool::CPerf,
                 "--" => do_sut = true,
                 _ => ()
             }
         }
         if options.sut.is_empty() {
-            Err("usage: fuzz-monitor [-p|-q] -- command [args]")
+            Err("usage: fuzz-monitor [-p|-q|-c] -- command [args]")
         } else {
             Ok(options)
         }
@@ -73,7 +76,13 @@ impl FuzzMonitor {
             let now = Instant::now();
             let count = match self.tool {
                 MonitoringTool::Qemu => qemu::trace(bytes, sut).len() as u64,
-                MonitoringTool::Perf => perf::trace(bytes, sut)
+                MonitoringTool::Perf => perf::trace(bytes, sut),
+                MonitoringTool::CPerf => {
+                    let mut bts_start: *mut myperf::BTSBranch = &mut myperf::BTSBranch { from: 0, to: 0, misc: 0 };
+                    let mut count: u64 = 0;
+                    myperf::monitor_api(bytes, sut, &mut bts_start, &mut count).unwrap();
+                    count
+                }
             };
             let elapsed = now.elapsed();
 
