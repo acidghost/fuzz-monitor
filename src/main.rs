@@ -117,11 +117,10 @@ impl FuzzMonitor {
         }
 
         let out_str = String::from_utf8_lossy(out.stdout.as_slice()).into_owned();
-        let mut lines = out_str.lines();
-        let mut line_split = lines.next().unwrap().split(" ");
-        line_split.next();
-        let splitted_fst = line_split.next().unwrap();
-        let splitted_snd = line_split.next().unwrap();
+        let line = out_str.lines().nth(0).unwrap();
+        let mut line_split = line.split(" ");
+        let splitted_fst = line_split.nth(1).unwrap();
+        let splitted_snd = line_split.nth(2).unwrap();
         Some((
             u64::from_str_radix(splitted_fst, 10).expect("failed parsing start address"),
             u64::from_str_radix(splitted_snd, 10).expect("failed parsing end address")

@@ -64,9 +64,8 @@ pub fn trace2(bytes: Vec<u8>, sut: &[&str]) -> Vec<BTSBranch> {
     for line in perf_out_str.lines() {
         if line.starts_with("branch") {
             let mut splitted = line.split(",");
-            splitted.next();
-            let splitted_fst = splitted.next().expect("no second element");
-            let splitted_snd = splitted.next().expect("no third element");
+            let splitted_fst = splitted.nth(1).expect("no second element");
+            let splitted_snd = splitted.nth(2).expect("no third element");
             branches.push(BTSBranch {
                 from: u64::from_str_radix(splitted_fst, 10).expect("failed parsing from"),
                 to: u64::from_str_radix(splitted_snd, 10).expect("failed parsing to"),
