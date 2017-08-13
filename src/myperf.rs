@@ -4,8 +4,11 @@ use std::ffi::CString;
 use std::process::{Command, Stdio};
 use std::io::Write;
 
+use std::collections::HashMap;
+
 
 #[repr(C)]
+#[derive(Eq, PartialEq, Hash, Clone)]
 pub struct BTSBranch {
     pub from: u64,
     pub to: u64,
@@ -47,6 +50,7 @@ pub fn trace(bytes: Vec<u8>, argv: &[&str], bts_start: *mut *mut BTSBranch, coun
     else { Ok(ret) }
 }
 
+#[allow(dead_code)]
 pub fn trace2(bytes: Vec<u8>, sut: &[&str]) -> Vec<BTSBranch> {
     let mut perf_proc = Command::new("./perf/perf").args(&["x"]).args(sut)
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
@@ -65,7 +69,7 @@ pub fn trace2(bytes: Vec<u8>, sut: &[&str]) -> Vec<BTSBranch> {
         if line.starts_with("branch") {
             let mut splitted = line.split(",");
             let splitted_fst = splitted.nth(1).expect("no second element");
-            let splitted_snd = splitted.nth(2).expect("no third element");
+            let splitted_snd = splitted.nth(0).expect("no third element");
             branches.push(BTSBranch {
                 from: u64::from_str_radix(splitted_fst, 10).expect("failed parsing from"),
                 to: u64::from_str_radix(splitted_snd, 10).expect("failed parsing to"),
@@ -75,4 +79,28 @@ pub fn trace2(bytes: Vec<u8>, sut: &[&str]) -> Vec<BTSBranch> {
     }
 
     branches
+}
+
+
+pub struct BranchStore {
+    hits: HashMap<BTSBranch, u64>
+}
+
+impl BranchStore {
+    pub fn empty() -> BranchStore {
+        BranchStore { hits: HashMap::new() }
+    }
+
+    pub fn add(&mut self, branches: &[BTSBranch]) -> usize {
+        let mut new = 0;
+        for branch in branches {
+            if let Some(entry) = self.hits.get_mut(branch) {
+                *entry += 1;
+                continue;
+            }
+            self.hits.insert(branch.clone(), 1);
+            new += 1;
+        }
+        new
+    }
 }
