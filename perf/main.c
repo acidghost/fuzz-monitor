@@ -17,6 +17,7 @@ int main(int argc, char const **argv)
   }
 
   bool human_readable = true;
+  log_level = INFO;
   if (argc > 2 && argv[1][0] == 'x' && argv[1][1] == '\0') {
     human_readable = false;
     log_level = MACHINE;

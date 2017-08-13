@@ -189,7 +189,6 @@ static int32_t perf_parent(bts_branch_t **bts_start, uint64_t *count)
       return PERF_FAILURE;
     }
   }
-  LOG_I("PID=%lu finished with status %d", gbl_status.child_pid, status);
 
   analyze_bts(bts_start, count);
   ATOMIC_SET(pem->data_head, 0);
@@ -310,6 +309,11 @@ int32_t perf_monitor_api(const uint8_t *data, size_t data_count, char const **ar
     dup2(in_fd, STDIN_FILENO);
     close(in_fd);
     perf_child(argv);
-    abort();
+    LOG_M("returning from child...");
+    // raise(SIGKILL);
+    return 0;
+    // kill(getpid(), 9);
+    // _exit(1);
+    // abort();
   }
 }
