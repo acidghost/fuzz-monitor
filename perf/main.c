@@ -26,16 +26,12 @@ int main(int argc, char const **argv)
     LOG_I("Starting perf tool...");
     perf_monitor(&argv[1]);
   } else {
-    perf_monitor(&argv[2]);
-    fflush(stdout);
-    /* TODO: fixme...
     uint8_t data[512];
     ssize_t read_sz = read(STDIN_FILENO, data, 511);
     if (read_sz < 0) {
       LOG_M("failed reading input");
       exit(EXIT_FAILURE);
     }
-    LOG_M("read %zd", read_sz);
 
     bts_branch_t *bts_start;
     uint64_t count;
@@ -44,11 +40,13 @@ int main(int argc, char const **argv)
       exit(EXIT_FAILURE);
     }
 
-    LOG_M("count %" PRIu64, count);
     for (bts_branch_t *br = bts_start; br < (bts_start + count); br++) {
-      uint64_t i = br - bts_start;
-      LOG_M("branch,%"PRIu64"/%"PRIu64",%" PRIu64 ",%" PRIu64, i, count, br->from, br->to);
+      if (br->from > 0xFFFFFFFF00000000 || br->to > 0xFFFFFFFF00000000) {
+        continue;
+      }
+      // uint64_t i = br - bts_start;
+      // LOG_M("branch,%"PRIu64"/%"PRIu64",%" PRIu64 ",%" PRIu64, i, count, br->from, br->to);
+      LOG_M("branch,%" PRIu64 ",%" PRIu64, br->from, br->to);
     }
-    */
   }
 }
