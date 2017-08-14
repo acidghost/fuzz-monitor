@@ -11,6 +11,7 @@
 
 
 #define BUF_SZ  (1024 * 1024)
+#define HASH_KEY_SEP "/"
 
 bool keep_running = true;
 
@@ -29,12 +30,21 @@ void int_sig_handler(int signum)
 }
 
 
-static void free_hashtable(HashTable *table)
+static void free_hashtable(HashTable *table, bool print_it)
 {
     HashTableIter hti;
     hashtable_iter_init(&hti, table);
     TableEntry *entry;
     while (hashtable_iter_next(&hti, &entry) != CC_ITER_END) {
+        if (print_it) {
+            char *dup = strdup((char *) entry->key);
+            char *split = strstr(dup, HASH_KEY_SEP);
+            char *second = split + 1;
+            *split = '\0';
+            LOG_I("0x%010x -> 0x%010x %10" PRIu64,
+                atol(dup), atol(second), *(uint64_t *) entry->value);
+            free(dup);
+        }
         free(entry->key);
         free(entry->value);
     }
@@ -74,7 +84,7 @@ static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hit
                 continue;
             }
             void *key = malloc(64 * sizeof(char));
-            snprintf(key, 64, "%" PRIu64 "/%" PRIu64, branch.from, branch.to);
+            snprintf(key, 64, "%" PRIu64 HASH_KEY_SEP "%" PRIu64, branch.from, branch.to);
             void *value;
             if (hashtable_get(branch_hits, key, value) == CC_OK) {
                 #pragma GCC diagnostic push
@@ -133,7 +143,7 @@ int main(int argc, char const *argv[])
     } else {
         signal(SIGINT, int_sig_handler);
         ret = monitor_loop(receiver, argv + 1, branch_hits);
-        free_hashtable(branch_hits);
+        free_hashtable(branch_hits, /* print_it */ true);
     }
 
     zmq_close(receiver);
