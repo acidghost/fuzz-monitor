@@ -8,6 +8,9 @@
 #include <hashtable.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <unistd.h>
+
+#include "sections.h"
 
 
 #define BUF_SZ  (1024 * 1024)
@@ -15,6 +18,12 @@
 #define HASH_KEY_SZ  64
 
 bool keep_running = true;
+
+
+typedef struct section_filter {
+    uint64_t sec_start;
+    uint64_t sec_end;
+} section_filter_t;
 
 
 static inline long get_time_ms(void)
@@ -33,6 +42,12 @@ void int_sig_handler(int signum)
 
 static void free_hashtable(HashTable *table, bool print_it)
 {
+    FILE *out_file;
+    if (print_it && (out_file = fopen("./out.txt", "w")) == NULL) {
+        PLOG_F("failed to open output file");
+        exit(EXIT_FAILURE);
+    }
+
     HashTableIter hti;
     hashtable_iter_init(&hti, table);
     TableEntry *entry;
@@ -42,7 +57,7 @@ static void free_hashtable(HashTable *table, bool print_it)
             char *split = strstr(dup, HASH_KEY_SEP);
             char *second = split + 1;
             *split = '\0';
-            LOG_I("0x%010x -> 0x%010x %10" PRIu64,
+            fprintf(out_file, "0x%010" PRIx64 " -> 0x%010" PRIx64 " %10" PRIu64 "\n",
                 atol(dup), atol(second), *(uint64_t *) entry->value);
             free(dup);
         }
@@ -50,16 +65,21 @@ static void free_hashtable(HashTable *table, bool print_it)
         free(entry->value);
     }
     hashtable_destroy(table);
+
+    if (print_it)
+        fclose(out_file);
 }
 
 
-static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hits)
+static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hits,
+                        section_filter_t *sec_filter)
 {
     while (keep_running) {
         uint8_t buf[BUF_SZ];
         int size = zmq_recv(receiver, buf, BUF_SZ, ZMQ_DONTWAIT);
         if (size == -1) {
             if (errno == EAGAIN) {
+                usleep(1000);
                 continue;
             } else if (!keep_running) {
                 break;
@@ -84,6 +104,12 @@ static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hit
             if (branch.from > 0xFFFFFFFF00000000 || branch.to > 0xFFFFFFFF00000000) {
                 continue;
             }
+
+            if (sec_filter && (
+                    (branch.from < sec_filter->sec_start || branch.from > sec_filter->sec_end)
+                    || (branch.to < sec_filter->sec_start || branch.to > sec_filter->sec_end)
+                )
+            ) continue;
 
             void *key = malloc(HASH_KEY_SZ * sizeof(char));
             snprintf(key, HASH_KEY_SZ, "%" PRIu64 HASH_KEY_SEP "%" PRIu64,
@@ -122,6 +148,19 @@ int main(int argc, char const *argv[])
 
     log_level = INFO;
 
+    uint64_t sec_start = 0;
+    uint64_t sec_end = 0;
+    int64_t sec_size = section_find(argv[1], ".text", &sec_start, &sec_end);
+    if (sec_size < 0) {
+        exit(EXIT_FAILURE);
+    } else if (sec_size == 0) {
+        LOG_W("%s has no .text section or it's empty", argv[1]);
+        exit(EXIT_FAILURE);
+    }
+
+    LOG_I("monitoring on %s (.text 0x%" PRIx64 " 0x%" PRIx64 " %" PRIi64 ")",
+        argv[1], sec_start, sec_end, sec_size);
+
     void *context = zmq_ctx_new();
     if (context == NULL) {
         LOG_F("failed to create new zmq context");
@@ -146,7 +185,8 @@ int main(int argc, char const *argv[])
         ret = EXIT_FAILURE;
     } else {
         signal(SIGINT, int_sig_handler);
-        ret = monitor_loop(receiver, argv + 1, branch_hits);
+        section_filter_t filter = { sec_start, sec_end };
+        ret = monitor_loop(receiver, argv + 1, branch_hits, &filter);
         free_hashtable(branch_hits, /* print_it */ true);
     }
 
