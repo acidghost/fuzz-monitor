@@ -4,6 +4,7 @@ LDLIBS = -ldl -lm -lzmq
 
 preloads := afl.so hongg.so
 
+.PHONY: clean
 all: $(preloads)
 
 %.so: preload.c

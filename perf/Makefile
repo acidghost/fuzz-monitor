@@ -8,6 +8,7 @@ SRCS := $(sort $(wildcard *.c))
 OBJS := $(SRCS:.c=.o)
 LIBDEPS := perf.o log.o
 
+.PHONY: clean
 all: $(BIN) $(LIB)
 
 $(BIN): $(OBJS)

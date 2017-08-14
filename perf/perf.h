@@ -8,17 +8,17 @@
 #define PERF_SUCCESS  1
 
 typedef struct bts_branch {
-  uint64_t from;
-  uint64_t to;
-  uint64_t misc;
+    uint64_t from;
+    uint64_t to;
+    uint64_t misc;
 } bts_branch_t;
 
 typedef struct gbl_status {
-  pid_t child_pid;
-  int perf_fd;
-  size_t data_ready;
-  void *mmap_buf;
-  void *mmap_aux;
+    pid_t child_pid;
+    int perf_fd;
+    size_t data_ready;
+    void *mmap_buf;
+    void *mmap_aux;
 } gbl_status_t;
 
 void perf_monitor(char const **argv);
