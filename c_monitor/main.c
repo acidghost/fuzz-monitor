@@ -50,8 +50,10 @@ static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hit
         if (size == -1) {
             if (errno == EAGAIN) {
                 continue;
+            } else if (!keep_running) {
+                break;
             } else {
-                LOG_F("failed to receive from zmq");
+                PLOG_F("failed to receive from zmq");
                 return EXIT_FAILURE;
             }
         }
@@ -74,10 +76,14 @@ static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hit
             void *key = malloc(64 * sizeof(char));
             snprintf(key, 64, "%" PRIu64 "/%" PRIu64, branch.from, branch.to);
             void *value;
-            if (hashtable_get(branch_hits, key, &value) == CC_OK) {
+            if (hashtable_get(branch_hits, key, value) == CC_OK) {
+                #pragma GCC diagnostic push
+                #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
                 *(uint64_t *) value += 1;
+                #pragma GCC diagnostic pop
             } else {
                 value = malloc(sizeof(uint64_t));
+                *(uint64_t *) value = 1;
                 if (hashtable_add(branch_hits, key, value) != CC_OK) {
                     LOG_F("failed to add branch [%s]", key);
                     return EXIT_FAILURE;
