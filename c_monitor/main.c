@@ -12,6 +12,7 @@
 
 #define BUF_SZ  (1024 * 1024)
 #define HASH_KEY_SEP "/"
+#define HASH_KEY_SZ  64
 
 bool keep_running = true;
 
@@ -83,8 +84,11 @@ static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hit
             if (branch.from > 0xFFFFFFFF00000000 || branch.to > 0xFFFFFFFF00000000) {
                 continue;
             }
-            void *key = malloc(64 * sizeof(char));
-            snprintf(key, 64, "%" PRIu64 HASH_KEY_SEP "%" PRIu64, branch.from, branch.to);
+
+            void *key = malloc(HASH_KEY_SZ * sizeof(char));
+            snprintf(key, HASH_KEY_SZ, "%" PRIu64 HASH_KEY_SEP "%" PRIu64,
+                branch.from, branch.to);
+
             void *value;
             if (hashtable_get(branch_hits, key, value) == CC_OK) {
                 #pragma GCC diagnostic push
@@ -112,7 +116,7 @@ static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hit
 int main(int argc, char const *argv[])
 {
     if (argc < 2) {
-        LOG_E("usage: %s command [args]", argv[0]);
+        LOG_I("usage: %s command [args]", argv[0]);
         exit(EXIT_FAILURE);
     }
 
