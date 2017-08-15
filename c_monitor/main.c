@@ -71,6 +71,50 @@ static void free_hashtable(HashTable *table, char *out_filename)
 }
 
 
+static int process_branches(bts_branch_t *bts_start, uint64_t count, HashTable *branch_hits,
+                            section_filter_t *sec_filter, uint64_t *new_branches)
+{
+    if (new_branches == NULL)
+        return 0;
+
+    for (uint64_t i = 0; i < count; i++) {
+        bts_branch_t branch = bts_start[i];
+        if (branch.from > 0xFFFFFFFF00000000 || branch.to > 0xFFFFFFFF00000000) {
+            continue;
+        }
+
+        if (sec_filter && (
+                (branch.from < sec_filter->sec_start || branch.from > sec_filter->sec_end)
+                || (branch.to < sec_filter->sec_start || branch.to > sec_filter->sec_end)
+            )
+        ) continue;
+
+        void *key = malloc(HASH_KEY_SZ * sizeof(char));
+        snprintf(key, HASH_KEY_SZ, "%" PRIu64 HASH_KEY_SEP "%" PRIu64,
+            branch.from, branch.to);
+
+        void *value;
+        if (hashtable_get(branch_hits, key, value) == CC_OK) {
+            #pragma GCC diagnostic push
+            #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+            *(uint64_t *) value += 1;
+            #pragma GCC diagnostic pop
+            free(key);
+        } else {
+            value = malloc(sizeof(uint64_t));
+            *(uint64_t *) value = 1;
+            if (hashtable_add(branch_hits, key, value) != CC_OK) {
+                LOG_F("failed to add branch [%s]", key);
+                return -1;
+            }
+            (*new_branches)++;
+        }
+    }
+
+    return 0;
+}
+
+
 static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hits,
                         section_filter_t *sec_filter)
 {
@@ -79,7 +123,7 @@ static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hit
         int size = zmq_recv(receiver, buf, BUF_SZ, ZMQ_DONTWAIT);
         if (size == -1) {
             if (errno == EAGAIN) {
-                usleep(1000);
+                usleep(100);
                 continue;
             } else if (!keep_running) {
                 break;
@@ -99,39 +143,8 @@ static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hit
         long elapsed_ms = get_time_ms() - start_ms;
 
         uint64_t new_branches = 0;
-        for (uint64_t i = 0; i < count; i++) {
-            bts_branch_t branch = bts_start[i];
-            if (branch.from > 0xFFFFFFFF00000000 || branch.to > 0xFFFFFFFF00000000) {
-                continue;
-            }
-
-            if (sec_filter && (
-                    (branch.from < sec_filter->sec_start || branch.from > sec_filter->sec_end)
-                    || (branch.to < sec_filter->sec_start || branch.to > sec_filter->sec_end)
-                )
-            ) continue;
-
-            void *key = malloc(HASH_KEY_SZ * sizeof(char));
-            snprintf(key, HASH_KEY_SZ, "%" PRIu64 HASH_KEY_SEP "%" PRIu64,
-                branch.from, branch.to);
-
-            void *value;
-            if (hashtable_get(branch_hits, key, value) == CC_OK) {
-                #pragma GCC diagnostic push
-                #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
-                *(uint64_t *) value += 1;
-                #pragma GCC diagnostic pop
-                free(key);
-            } else {
-                value = malloc(sizeof(uint64_t));
-                *(uint64_t *) value = 1;
-                if (hashtable_add(branch_hits, key, value) != CC_OK) {
-                    LOG_F("failed to add branch [%s]", key);
-                    return EXIT_FAILURE;
-                }
-                new_branches++;
-            }
-        }
+        if (process_branches(bts_start, count, branch_hits, sec_filter, &new_branches) == -1)
+            return EXIT_FAILURE;
 
         LOG_I("%8" PRIu64 " %6" PRIu64 " %8ldms", count, new_branches, elapsed_ms);
     }

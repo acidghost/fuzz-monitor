@@ -25,7 +25,7 @@
 #define STR(s) #s
 #define _LOG_FILENAME(x) STR(x) ".log"
 #define LOG_FILENAME _LOG_FILENAME(FUZZ)
-#define SKIP_N 1000
+#define SKIP_N 100
 
 static pid_t pid;
 static int fuzzer_out_fd;
