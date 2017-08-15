@@ -80,6 +80,7 @@ int64_t section_find(const char *filename, const char *sec_name,
 	if(!sh_tbl) {
 		LOG_F("failed to allocate %d bytes", (eh.e_shentsize * eh.e_shnum));
         close(fd);
+		free(sh_tbl);
         return -1;
 	}
 	read_section_header_table(fd, &eh, sh_tbl);
@@ -89,6 +90,7 @@ int64_t section_find(const char *filename, const char *sec_name,
     char *sh_str = read_section(fd, sh_tbl[eh.e_shstrndx]);
     close(fd);
     if (sh_str == NULL) {
+		free(sh_tbl);
         return -1;
     }
 
@@ -99,8 +101,12 @@ int64_t section_find(const char *filename, const char *sec_name,
         }
         *sec_start = sh_tbl[i].sh_addr;
         *sec_end = sh_tbl[i].sh_addr + sh_tbl[i].sh_size;
+		free(sh_str);
+		free(sh_tbl);
         return *sec_end - *sec_start;
     }
 
+	free(sh_str);
+	free(sh_tbl);
     return 0;
 }
