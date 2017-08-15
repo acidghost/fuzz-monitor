@@ -40,11 +40,11 @@ void int_sig_handler(int signum)
 }
 
 
-static void free_hashtable(HashTable *table, bool print_it)
+static void free_hashtable(HashTable *table, char *out_filename)
 {
     FILE *out_file;
-    if (print_it && (out_file = fopen("./out.txt", "w")) == NULL) {
-        PLOG_F("failed to open output file");
+    if (out_filename && (out_file = fopen(out_filename, "w")) == NULL) {
+        PLOG_F("failed to open output file %s", out_filename);
         exit(EXIT_FAILURE);
     }
 
@@ -52,7 +52,7 @@ static void free_hashtable(HashTable *table, bool print_it)
     hashtable_iter_init(&hti, table);
     TableEntry *entry;
     while (hashtable_iter_next(&hti, &entry) != CC_ITER_END) {
-        if (print_it) {
+        if (out_filename) {
             char *dup = strdup((char *) entry->key);
             char *split = strstr(dup, HASH_KEY_SEP);
             char *second = split + 1;
@@ -66,7 +66,7 @@ static void free_hashtable(HashTable *table, bool print_it)
     }
     hashtable_destroy(table);
 
-    if (print_it)
+    if (out_filename)
         fclose(out_file);
 }
 
@@ -142,25 +142,42 @@ static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hit
 
 int main(int argc, char const *argv[])
 {
-    if (argc < 2) {
-        LOG_I("usage: %s command [args]", argv[0]);
-        exit(EXIT_FAILURE);
-    }
-
     log_level = INFO;
+    char *out_filename = NULL;
+    char *sec_name = NULL;
+    int opt;
+    while ((opt = getopt(argc, (char * const *) argv, "f:s:")) != -1) {
+        switch (opt) {
+        case 'f':
+            out_filename = optarg;
+            break;
+        case 's':
+            sec_name = optarg;
+            break;
+        }
+    }
 
-    uint64_t sec_start = 0;
-    uint64_t sec_end = 0;
-    int64_t sec_size = section_find(argv[1], ".text", &sec_start, &sec_end);
-    if (sec_size < 0) {
-        exit(EXIT_FAILURE);
-    } else if (sec_size == 0) {
-        LOG_W("%s has no .text section or it's empty", argv[1]);
+    if (argc == optind) {
+        LOG_I("usage: %s [-f outfile] [-s section] -- command [args]", argv[0]);
         exit(EXIT_FAILURE);
     }
 
-    LOG_I("monitoring on %s (.text 0x%" PRIx64 " 0x%" PRIx64 " %" PRIi64 ")",
-        argv[1], sec_start, sec_end, sec_size);
+    char const **sut = argv + optind;
+
+    section_filter_t filter;
+    if (sec_name) {
+        int64_t sec_size = section_find(sut[0], sec_name, &filter.sec_start, &filter.sec_end);
+        if (sec_size <= 0) {
+            if (sec_size == 0)
+                LOG_W("%s has no %s section or it's empty", sut[0], sec_name);
+            exit(EXIT_FAILURE);
+        }
+
+        LOG_I("monitoring on %s (%s 0x%" PRIx64 " 0x%" PRIx64 " %" PRIi64 ")",
+            sut[0], sec_name, filter.sec_start, filter.sec_end, sec_size);
+    } else {
+        LOG_I("monitoring on %s (all code)", sut[0]);
+    }
 
     void *context = zmq_ctx_new();
     if (context == NULL) {
@@ -186,9 +203,8 @@ int main(int argc, char const *argv[])
         ret = EXIT_FAILURE;
     } else {
         signal(SIGINT, int_sig_handler);
-        section_filter_t filter = { sec_start, sec_end };
-        ret = monitor_loop(receiver, argv + 1, branch_hits, &filter);
-        free_hashtable(branch_hits, /* print_it */ true);
+        ret = monitor_loop(receiver, sut, branch_hits, sec_name ? &filter : NULL);
+        free_hashtable(branch_hits, out_filename);
     }
 
     zmq_close(receiver);
