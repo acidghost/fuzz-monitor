@@ -121,6 +121,7 @@ static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hit
                 #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
                 *(uint64_t *) value += 1;
                 #pragma GCC diagnostic pop
+                free(key);
             } else {
                 value = malloc(sizeof(uint64_t));
                 *(uint64_t *) value = 1;
