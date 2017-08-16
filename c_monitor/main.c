@@ -141,6 +141,13 @@ static int process_branches(bts_branch_t *bts_start, uint64_t count, HashTable *
 static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hits,
                         section_filter_t *sec_filter)
 {
+    HashTableConf seen_inputs_table_conf;
+    hashtable_conf_init(&seen_inputs_table_conf);
+    seen_inputs_table_conf.hash = GENERAL_HASH;
+    HashTable *seen_inputs_table = NULL;
+    assert(hashtable_new_conf(&seen_inputs_table_conf, &seen_inputs_table) == CC_OK);
+
+    int ret = EXIT_SUCCESS;
     while (keep_running) {
         uint8_t buf[BUF_SZ];
         int size = zmq_recv(receiver, buf, BUF_SZ, ZMQ_DONTWAIT);
@@ -152,8 +159,21 @@ static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hit
                 break;
             } else {
                 PLOG_F("failed to receive from zmq");
-                return EXIT_FAILURE;
+                ret = EXIT_FAILURE;
+                break;
             }
+        }
+
+        uint64_t *buf_hash = malloc(sizeof(uint64_t));
+        *buf_hash = hashtable_hash(buf, KEY_LENGTH_VARIABLE, 42);
+        uint32_t *seen_inputs_value = NULL;
+        if (hashtable_get(seen_inputs_table, buf_hash, (void **) &seen_inputs_table) == CC_OK) {
+            (*seen_inputs_value)++;
+            free(buf_hash);
+        } else {
+            seen_inputs_value = malloc(sizeof(uint32_t));
+            *seen_inputs_value = 1;
+            assert(hashtable_add(seen_inputs_table, buf_hash, seen_inputs_value) == CC_OK);
         }
 
         bts_branch_t *bts_start;
@@ -161,18 +181,32 @@ static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hit
         long start_ms = get_time_ms();
         if (perf_monitor_api(buf, size, argv, &bts_start, &count) == PERF_FAILURE) {
             LOG_F("failed perf monitoring");
-            return EXIT_FAILURE;
+            ret = EXIT_FAILURE;
+            break;
         }
         long elapsed_ms = get_time_ms() - start_ms;
 
         uint64_t new_branches = 0;
-        if (process_branches(bts_start, count, branch_hits, sec_filter, &new_branches) == -1)
-            return EXIT_FAILURE;
+        if (process_branches(bts_start, count, branch_hits, sec_filter, &new_branches) == -1) {
+            ret = EXIT_FAILURE;
+            break;
+        }
 
         LOG_I("%8" PRIu64 " %6" PRIu64 " %8ldms", count, new_branches, elapsed_ms);
     }
 
-    return EXIT_SUCCESS;
+    HashTableIter hti;
+    hashtable_iter_init(&hti, seen_inputs_table);
+    TableEntry *seen_inputs_entry;
+    while (hashtable_iter_next(&hti, &seen_inputs_entry) != CC_ITER_END) {
+        LOG_I("%" PRIx64 " %" PRIu32, * (uint64_t *) seen_inputs_entry->key,
+            * (uint32_t *) seen_inputs_entry->value);
+        free(seen_inputs_entry->key);
+        free(seen_inputs_entry->value);
+    }
+    hashtable_destroy(seen_inputs_table);
+
+    return ret;
 }
 
 
