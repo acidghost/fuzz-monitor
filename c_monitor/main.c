@@ -9,8 +9,10 @@
 #include <signal.h>
 #include <stdbool.h>
 #include <unistd.h>
+#include <assert.h>
 
 #include "sections.h"
+#include "graph.h"
 
 
 #define BUF_SZ  (1024 * 1024)
@@ -40,9 +42,19 @@ void int_sig_handler(int signum)
 }
 
 
+void graph_print_and_free(uint64_t *from, uint64_t **connections, size_t connections_size)
+{
+    LOG_I("0x%010" PRIx64 " %zu", *from, connections_size);
+    free(from);
+    for (size_t i = 0; i < connections_size; i++) {
+        free(connections[i]);
+    }
+}
+
+
 static void free_hashtable(HashTable *table, char *out_filename)
 {
-    FILE *out_file;
+    FILE *out_file = NULL;
     if (out_filename && (out_file = fopen(out_filename, "w")) == NULL) {
         PLOG_F("failed to open output file %s", out_filename);
         exit(EXIT_FAILURE);
@@ -51,20 +63,31 @@ static void free_hashtable(HashTable *table, char *out_filename)
     HashTableIter hti;
     hashtable_iter_init(&hti, table);
     TableEntry *entry;
+    Graph *graph = NULL;
+    assert(graph_new(&graph) == CC_OK);
     while (hashtable_iter_next(&hti, &entry) != CC_ITER_END) {
         if (out_filename) {
             char *dup = strdup((char *) entry->key);
             char *split = strstr(dup, HASH_KEY_SEP);
             char *second = split + 1;
             *split = '\0';
+            uint64_t *from = malloc(sizeof(uint64_t));
+            *from = atol(dup);
+            uint64_t *to = malloc(sizeof(uint64_t));
+            *to = atol(second);
+            assert(graph_add(graph, from, to) == CC_OK);
             fprintf(out_file, "0x%010" PRIx64 " -> 0x%010" PRIx64 " %10" PRIu64 "\n",
-                atol(dup), atol(second), *(uint64_t *) entry->value);
+                *from, *to, *(uint64_t *) entry->value);
             free(dup);
         }
         free(entry->key);
         free(entry->value);
     }
     hashtable_destroy(table);
+
+    LOG_I("graph with %zu nodes and %zu edges", graph_nodes(graph), graph_edges(graph));
+    graph_foreach(graph, graph_print_and_free);
+    graph_destroy(graph);
 
     if (out_filename)
         fclose(out_file);
