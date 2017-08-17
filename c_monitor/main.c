@@ -113,19 +113,18 @@ static int process_branches(bts_branch_t *bts_start, uint64_t count, HashTable *
         ) continue;
 
         void *key = malloc(HASH_KEY_SZ * sizeof(char));
+        assert(key != NULL);
         snprintf(key, HASH_KEY_SZ, "%" PRIu64 HASH_KEY_SEP "%" PRIu64,
             branch.from, branch.to);
 
-        void *value;
-        if (hashtable_get(branch_hits, key, value) == CC_OK) {
-            #pragma GCC diagnostic push
-            #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
-            *(uint64_t *) value += 1;
-            #pragma GCC diagnostic pop
+        uint64_t *value = NULL;
+        if (hashtable_get(branch_hits, key, (void **) &value) == CC_OK) {
+            (*value)++;
             free(key);
         } else {
             value = malloc(sizeof(uint64_t));
-            *(uint64_t *) value = 1;
+            assert(value != NULL);
+            *value = 1;
             if (hashtable_add(branch_hits, key, value) != CC_OK) {
                 LOG_F("failed to add branch [%s]", key);
                 return -1;
@@ -138,12 +137,26 @@ static int process_branches(bts_branch_t *bts_start, uint64_t count, HashTable *
 }
 
 
+int cmp_uint64(const void *n1, const void *n2)
+{
+    const uint64_t _n1 = *(const uint64_t *) n1;
+    const uint64_t _n2 = *(const uint64_t *) n2;
+    if (_n1 > _n2)
+        return 1;
+    else if (_n1 < _n2)
+        return -1;
+    else
+        return 0;
+}
+
+
 static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hits,
                         section_filter_t *sec_filter)
 {
     HashTableConf seen_inputs_table_conf;
     hashtable_conf_init(&seen_inputs_table_conf);
     seen_inputs_table_conf.hash = GENERAL_HASH;
+    seen_inputs_table_conf.key_compare = cmp_uint64;
     HashTable *seen_inputs_table = NULL;
     assert(hashtable_new_conf(&seen_inputs_table_conf, &seen_inputs_table) == CC_OK);
 
@@ -167,11 +180,12 @@ static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hit
         uint64_t *buf_hash = malloc(sizeof(uint64_t));
         *buf_hash = hashtable_hash(buf, KEY_LENGTH_VARIABLE, 42);
         uint32_t *seen_inputs_value = NULL;
-        if (hashtable_get(seen_inputs_table, buf_hash, (void **) &seen_inputs_table) == CC_OK) {
+        if (hashtable_get(seen_inputs_table, buf_hash, (void **) &seen_inputs_value) == CC_OK) {
             (*seen_inputs_value)++;
             free(buf_hash);
         } else {
             seen_inputs_value = malloc(sizeof(uint32_t));
+            assert(seen_inputs_value != NULL);
             *seen_inputs_value = 1;
             assert(hashtable_add(seen_inputs_table, buf_hash, seen_inputs_value) == CC_OK);
         }
@@ -192,15 +206,16 @@ static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hit
             break;
         }
 
-        LOG_I("%8" PRIu64 " %6" PRIu64 " %8ldms", count, new_branches, elapsed_ms);
+        LOG_I("%8" PRIu64 " %6" PRIu64 " %8ldms %6" PRIu32,
+            count, new_branches, elapsed_ms, *seen_inputs_value);
     }
 
     HashTableIter hti;
     hashtable_iter_init(&hti, seen_inputs_table);
     TableEntry *seen_inputs_entry;
     while (hashtable_iter_next(&hti, &seen_inputs_entry) != CC_ITER_END) {
-        LOG_I("%" PRIx64 " %" PRIu32, * (uint64_t *) seen_inputs_entry->key,
-            * (uint32_t *) seen_inputs_entry->value);
+        LOG_I("%10" PRIx64 " %5" PRIu32,
+            *(uint64_t *) seen_inputs_entry->key, *(uint32_t *) seen_inputs_entry->value);
         free(seen_inputs_entry->key);
         free(seen_inputs_entry->value);
     }
