@@ -55,18 +55,21 @@ void graph_print_and_free(uint64_t *from, uint64_t **connections, size_t connect
 static void free_hashtable(HashTable *table, char *out_filename)
 {
     FILE *out_file = NULL;
-    if (out_filename && (out_file = fopen(out_filename, "w")) == NULL) {
-        PLOG_F("failed to open output file %s", out_filename);
-        exit(EXIT_FAILURE);
+    Graph *graph = NULL;
+    if (out_filename != NULL) {
+        if ((out_file = fopen(out_filename, "w")) == NULL) {
+            PLOG_F("failed to open output file %s", out_filename);
+            exit(EXIT_FAILURE);
+        }
+        assert(graph_new(&graph) == CC_OK);
+        fprintf(out_file, "digraph {\n");
     }
 
     HashTableIter hti;
     hashtable_iter_init(&hti, table);
     TableEntry *entry;
-    Graph *graph = NULL;
-    assert(graph_new(&graph) == CC_OK);
     while (hashtable_iter_next(&hti, &entry) != CC_ITER_END) {
-        if (out_filename) {
+        if (out_filename != NULL) {
             char *dup = strdup((char *) entry->key);
             char *split = strstr(dup, HASH_KEY_SEP);
             char *second = split + 1;
@@ -76,7 +79,7 @@ static void free_hashtable(HashTable *table, char *out_filename)
             uint64_t *to = malloc(sizeof(uint64_t));
             *to = atol(second);
             assert(graph_add(graph, from, to) == CC_OK);
-            fprintf(out_file, "0x%010" PRIx64 " -> 0x%010" PRIx64 " %10" PRIu64 "\n",
+            fprintf(out_file, "\t\"0x%" PRIx64 "\" -> \"0x%" PRIx64 "\" [label=\"%" PRIu64 "\"];\n",
                 *from, *to, *(uint64_t *) entry->value);
             free(dup);
         }
@@ -85,12 +88,13 @@ static void free_hashtable(HashTable *table, char *out_filename)
     }
     hashtable_destroy(table);
 
-    LOG_I("graph with %zu nodes and %zu edges", graph_nodes(graph), graph_edges(graph));
-    graph_foreach(graph, graph_print_and_free);
-    graph_destroy(graph);
-
-    if (out_filename)
+    if (out_filename != NULL) {
+        fprintf(out_file, "}\n");
         fclose(out_file);
+        LOG_I("graph with %zu nodes and %zu edges", graph_nodes(graph), graph_edges(graph));
+        graph_foreach(graph, graph_print_and_free);
+        graph_destroy(graph);
+    }
 }
 
 
@@ -151,7 +155,7 @@ int cmp_uint64(const void *n1, const void *n2)
 
 
 static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hits,
-                        section_filter_t *sec_filter)
+                        section_filter_t *sec_filter, bool print_seen_inputs)
 {
     HashTableConf seen_inputs_table_conf;
     hashtable_conf_init(&seen_inputs_table_conf);
@@ -159,6 +163,8 @@ static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hit
     seen_inputs_table_conf.key_compare = cmp_uint64;
     HashTable *seen_inputs_table = NULL;
     assert(hashtable_new_conf(&seen_inputs_table_conf, &seen_inputs_table) == CC_OK);
+    double seen_avg = 0;
+    size_t seen_total = 0;
 
     int ret = EXIT_SUCCESS;
     while (keep_running) {
@@ -176,6 +182,7 @@ static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hit
                 break;
             }
         }
+        seen_total++;
 
         uint64_t *buf_hash = malloc(sizeof(uint64_t));
         *buf_hash = hashtable_hash(buf, KEY_LENGTH_VARIABLE, 42);
@@ -189,6 +196,9 @@ static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hit
             *seen_inputs_value = 1;
             assert(hashtable_add(seen_inputs_table, buf_hash, seen_inputs_value) == CC_OK);
         }
+        seen_avg = seen_total / (double) hashtable_size(seen_inputs_table);
+        if (seen_avg > 2)
+            seen_total = hashtable_size(seen_inputs_table);
 
         bts_branch_t *bts_start;
         uint64_t count;
@@ -206,16 +216,18 @@ static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hit
             break;
         }
 
-        LOG_I("%8" PRIu64 " %6" PRIu64 " %8ldms %6" PRIu32,
-            count, new_branches, elapsed_ms, *seen_inputs_value);
+        LOG_I("%8" PRIu64 " %6" PRIu64 " %8ldms %6" PRIu32 " %4.3g",
+            count, new_branches, elapsed_ms, *seen_inputs_value, seen_avg);
     }
 
     HashTableIter hti;
     hashtable_iter_init(&hti, seen_inputs_table);
     TableEntry *seen_inputs_entry;
     while (hashtable_iter_next(&hti, &seen_inputs_entry) != CC_ITER_END) {
-        LOG_I("%10" PRIx64 " %5" PRIu32,
-            *(uint64_t *) seen_inputs_entry->key, *(uint32_t *) seen_inputs_entry->value);
+        if (print_seen_inputs) {
+            LOG_I("%10" PRIx64 " %5" PRIu32,
+                *(uint64_t *) seen_inputs_entry->key, *(uint32_t *) seen_inputs_entry->value);
+        }
         free(seen_inputs_entry->key);
         free(seen_inputs_entry->value);
     }
@@ -230,8 +242,9 @@ int main(int argc, char const *argv[])
     log_level = INFO;
     char *out_filename = NULL;
     char *sec_name = NULL;
+    bool print_seen_inputs = false;
     int opt;
-    while ((opt = getopt(argc, (char * const *) argv, "f:s:")) != -1) {
+    while ((opt = getopt(argc, (char * const *) argv, "f:s:i")) != -1) {
         switch (opt) {
         case 'f':
             out_filename = optarg;
@@ -239,11 +252,14 @@ int main(int argc, char const *argv[])
         case 's':
             sec_name = optarg;
             break;
+        case 'i':
+            print_seen_inputs = true;
+            break;
         }
     }
 
     if (argc == optind) {
-        LOG_I("usage: %s [-f outfile] [-s section] -- command [args]", argv[0]);
+        LOG_I("usage: %s [-f outfile] [-s section] [-i] -- command [args]", argv[0]);
         exit(EXIT_FAILURE);
     }
 
@@ -288,7 +304,7 @@ int main(int argc, char const *argv[])
         ret = EXIT_FAILURE;
     } else {
         signal(SIGINT, int_sig_handler);
-        ret = monitor_loop(receiver, sut, branch_hits, sec_name ? &filter : NULL);
+        ret = monitor_loop(receiver, sut, branch_hits, sec_name ? &filter : NULL, print_seen_inputs);
         free_hashtable(branch_hits, out_filename);
     }
 
