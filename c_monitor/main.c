@@ -28,6 +28,13 @@ typedef struct section_filter {
     uint64_t sec_end;
 } section_filter_t;
 
+typedef struct monitor {
+    HashTable *branch_hits;
+    section_filter_t *sec_filter;
+    basic_block_t *bbs;
+    size_t bbs_n;
+} monitor_t;
+
 
 static inline long get_time_ms(void)
 {
@@ -99,11 +106,13 @@ static void free_hashtable(HashTable *table, char *out_filename)
 }
 
 
-static int process_branches(bts_branch_t *bts_start, uint64_t count, HashTable *branch_hits,
-                            section_filter_t *sec_filter, uint64_t *new_branches)
+static int process_branches(bts_branch_t *bts_start, uint64_t count, monitor_t *monitor,
+                            uint64_t *new_branches)
 {
     if (new_branches == NULL)
         return 0;
+
+    const section_filter_t *sec_filter = monitor->sec_filter;
 
     for (uint64_t i = 0; i < count; i++) {
         bts_branch_t branch = bts_start[i];
@@ -117,20 +126,34 @@ static int process_branches(bts_branch_t *bts_start, uint64_t count, HashTable *
             )
         ) continue;
 
+        uint64_t from_bb = 0, to_bb = 0;
+        for (size_t j = 0; j < monitor->bbs_n; j++) {
+            basic_block_t bb = monitor->bbs[j];
+            if (branch.from >= bb.from && branch.from < bb.to)
+                from_bb = bb.from;
+            if (branch.to >= bb.from && branch.to < bb.to)
+                to_bb = bb.from;
+            if (from_bb != 0 && to_bb != 0)
+                break;
+        }
+        if (from_bb == 0)
+            from_bb = branch.from;
+        if (to_bb == 0)
+            to_bb = branch.to;
+
         void *key = malloc(HASH_KEY_SZ * sizeof(char));
         assert(key != NULL);
-        snprintf(key, HASH_KEY_SZ, "%" PRIu64 HASH_KEY_SEP "%" PRIu64,
-            branch.from, branch.to);
+        snprintf(key, HASH_KEY_SZ, "%" PRIu64 HASH_KEY_SEP "%" PRIu64, from_bb, to_bb);
 
         uint64_t *value = NULL;
-        if (hashtable_get(branch_hits, key, (void **) &value) == CC_OK) {
+        if (hashtable_get(monitor->branch_hits, key, (void **) &value) == CC_OK) {
             (*value)++;
             free(key);
         } else {
             value = malloc(sizeof(uint64_t));
             assert(value != NULL);
             *value = 1;
-            if (hashtable_add(branch_hits, key, value) != CC_OK) {
+            if (hashtable_add(monitor->branch_hits, key, value) != CC_OK) {
                 LOG_F("failed to add branch [%s]", key);
                 return -1;
             }
@@ -155,8 +178,8 @@ int cmp_uint64(const void *n1, const void *n2)
 }
 
 
-static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hits,
-                        section_filter_t *sec_filter, bool print_seen_inputs)
+static int monitor_loop(void *receiver, char const **argv, bool print_seen_inputs,
+                        monitor_t *monitor)
 {
     HashTableConf seen_inputs_table_conf;
     hashtable_conf_init(&seen_inputs_table_conf);
@@ -212,7 +235,7 @@ static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hit
         long elapsed_ms = get_time_ms() - start_ms;
 
         uint64_t new_branches = 0;
-        if (process_branches(bts_start, count, branch_hits, sec_filter, &new_branches) == -1) {
+        if (process_branches(bts_start, count, monitor, &new_branches) == -1) {
             ret = EXIT_FAILURE;
             break;
         }
@@ -235,6 +258,16 @@ static int monitor_loop(void *receiver, char const **argv, HashTable *branch_hit
     hashtable_destroy(seen_inputs_table);
 
     return ret;
+}
+
+
+void free_monitor(monitor_t *monitor)
+{
+    if (monitor->sec_filter)
+        free(monitor->sec_filter);
+    if (monitor->bbs)
+        free(monitor->bbs);
+    free(monitor);
 }
 
 
@@ -270,62 +303,71 @@ int main(int argc, char const *argv[])
 
     char const **sut = argv + optind;
 
-    section_filter_t filter;
+    monitor_t *monitor = malloc(sizeof(monitor_t));
+    assert(monitor != NULL);
+    memset(monitor, 0, sizeof(monitor_t));
+
     if (sec_name) {
-        int64_t sec_size = section_find(sut[0], sec_name, &filter.sec_start, &filter.sec_end);
+        monitor->sec_filter = malloc(sizeof(section_filter_t));
+        assert(monitor->sec_filter != NULL);
+        int64_t sec_size = section_find(sut[0], sec_name,
+            &monitor->sec_filter->sec_start,
+            &monitor->sec_filter->sec_end);
         if (sec_size <= 0) {
             if (sec_size == 0)
                 LOG_W("%s has no %s section or it's empty", sut[0], sec_name);
+            free_monitor(monitor);
             exit(EXIT_FAILURE);
         }
 
         LOG_I("monitoring on %s (%s 0x%" PRIx64 " 0x%" PRIx64 " %" PRIi64 ")",
-            sut[0], sec_name, filter.sec_start, filter.sec_end, sec_size);
+            sut[0], sec_name, monitor->sec_filter->sec_start, monitor->sec_filter->sec_end, sec_size);
     } else {
         LOG_I("monitoring on %s (all code)", sut[0]);
     }
 
-    basic_block_t *bbs = NULL;
-    ssize_t bbs_n = basic_blocks_find(basic_block_script, sut[0], &bbs);
-    if (bbs_n < 0) {
+    monitor->bbs_n = basic_blocks_find(basic_block_script, sut[0], &monitor->bbs);
+    if (monitor->bbs_n < 0) {
         LOG_F("failed reading basic blocks");
+        free_monitor(monitor);
         exit(EXIT_FAILURE);
     }
-    LOG_I("found %zd basic blocks", bbs_n);
-    for (size_t i = 0; i < bbs_n; i++) {
-        LOG_D("BB 0x%08" PRIx64 " 0x%08" PRIx64, bbs[i].from, bbs[i].to);
+    LOG_I("found %zd basic blocks", monitor->bbs_n);
+    for (size_t i = 0; i < monitor->bbs_n; i++) {
+        LOG_D("BB 0x%08" PRIx64 " 0x%08" PRIx64, monitor->bbs[i].from, monitor->bbs[i].to);
     }
-    free(bbs);
 
     void *context = zmq_ctx_new();
     if (context == NULL) {
         LOG_F("failed to create new zmq context");
+        free_monitor(monitor);
         exit(EXIT_FAILURE);
     }
     void *receiver = zmq_socket(context, ZMQ_PULL);
     if (receiver == NULL) {
         PLOG_F("failed to create socket");
+        free_monitor(monitor);
         exit(EXIT_FAILURE);
     }
     if (zmq_bind(receiver, "tcp://*:5558") == -1) {
         PLOG_F("failed to connect to socket");
+        free_monitor(monitor);
         exit(EXIT_FAILURE);
     }
 
     LOG_I("listening...");
 
-    HashTable *branch_hits;
-    int ret;
-    if (hashtable_new(&branch_hits) != CC_OK) {
+    int ret = EXIT_FAILURE;
+    if (hashtable_new(&monitor->branch_hits) != CC_OK) {
         LOG_F("failed to create hashtable");
-        ret = EXIT_FAILURE;
     } else {
         signal(SIGINT, int_sig_handler);
-        ret = monitor_loop(receiver, sut, branch_hits, sec_name ? &filter : NULL, print_seen_inputs);
-        free_hashtable(branch_hits, out_filename);
+        ret = monitor_loop(receiver, sut, print_seen_inputs, monitor);
+        free_hashtable(monitor->branch_hits, out_filename);
     }
 
     zmq_close(receiver);
     zmq_ctx_destroy(context);
+    free_monitor(monitor);
     return ret;
 }
