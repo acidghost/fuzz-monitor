@@ -57,8 +57,7 @@ char *read_section(int32_t fd, Elf_Shdr sh)
 }
 
 
-int64_t section_find(const char *filename, const char *sec_name,
-                     uint64_t *sec_start, uint64_t *sec_end)
+int64_t section_find(const char *filename, const char *sec_name, section_bounds_t *bounds)
 {
     int fd = open(filename, O_RDONLY | O_SYNC);
     if (fd == -1) {
@@ -99,11 +98,11 @@ int64_t section_find(const char *filename, const char *sec_name,
         if (strstr(sh_name, sec_name) == NULL) {
             continue;
         }
-        *sec_start = sh_tbl[i].sh_addr;
-        *sec_end = sh_tbl[i].sh_addr + sh_tbl[i].sh_size;
+        bounds->sec_start = sh_tbl[i].sh_addr;
+        bounds->sec_end = sh_tbl[i].sh_addr + sh_tbl[i].sh_size;
 		free(sh_str);
 		free(sh_tbl);
-        return *sec_end - *sec_start;
+        return bounds->sec_end - bounds->sec_start;
     }
 
 	free(sh_str);

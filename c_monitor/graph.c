@@ -74,7 +74,7 @@ enum cc_stat graph_add(Graph *graph, uint64_t *from, uint64_t *to)
 }
 
 
-void graph_foreach(Graph *graph, void (*fn)(uint64_t *, uint64_t **, size_t))
+void graph_foreach(Graph *graph, void *data, void (*fn)(uint64_t *, uint64_t **, size_t, void*))
 {
     ArrayIter nodes_iter;
     array_iter_init(&nodes_iter, graph->nodes);
@@ -96,7 +96,7 @@ void graph_foreach(Graph *graph, void (*fn)(uint64_t *, uint64_t **, size_t))
             connections_ptr++;
         }
 
-        fn(node, connections, connections_size);
+        fn(node, connections, connections_size, data);
         free(connections);
     }
 }
