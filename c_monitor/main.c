@@ -13,6 +13,7 @@
 
 #include "sections.h"
 #include "graph.h"
+#include "bb.h"
 
 
 #define BUF_SZ  (1024 * 1024)
@@ -243,8 +244,9 @@ int main(int argc, char const *argv[])
     char *out_filename = NULL;
     char *sec_name = NULL;
     bool print_seen_inputs = false;
+    char *basic_block_script = NULL;
     int opt;
-    while ((opt = getopt(argc, (char * const *) argv, "f:s:i")) != -1) {
+    while ((opt = getopt(argc, (char * const *) argv, "f:s:ib:")) != -1) {
         switch (opt) {
         case 'f':
             out_filename = optarg;
@@ -255,11 +257,14 @@ int main(int argc, char const *argv[])
         case 'i':
             print_seen_inputs = true;
             break;
+        case 'b':
+            basic_block_script = optarg;
+            break;
         }
     }
 
-    if (argc == optind) {
-        LOG_I("usage: %s [-f outfile] [-s section] [-i] -- command [args]", argv[0]);
+    if (argc == optind || basic_block_script == NULL) {
+        LOG_I("usage: %s [-f outfile] [-s section] [-i] -b r2bb.sh -- command [args]", argv[0]);
         exit(EXIT_FAILURE);
     }
 
@@ -279,6 +284,18 @@ int main(int argc, char const *argv[])
     } else {
         LOG_I("monitoring on %s (all code)", sut[0]);
     }
+
+    basic_block_t *bbs = NULL;
+    ssize_t bbs_n = basic_blocks_find(basic_block_script, sut[0], &bbs);
+    if (bbs_n < 0) {
+        LOG_F("failed reading basic blocks");
+        exit(EXIT_FAILURE);
+    }
+    LOG_I("found %zd basic blocks", bbs_n);
+    for (size_t i = 0; i < bbs_n; i++) {
+        LOG_D("BB 0x%08" PRIx64 " 0x%08" PRIx64, bbs[i].from, bbs[i].to);
+    }
+    free(bbs);
 
     void *context = zmq_ctx_new();
     if (context == NULL) {
