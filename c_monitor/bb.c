@@ -24,6 +24,7 @@ ssize_t basic_blocks_find(const char *r2bb_script, const char *bin, basic_block_
     char line[LINE_SZ];
     *bbs = malloc(BBS_SZ);
     assert(*bbs != NULL);
+    memset(*bbs, 0, BBS_SZ);
     size_t bbs_n = 0;
     while (fgets(line, LINE_SZ, stream) != NULL) {
         assert(bbs_n < BBS_SZ);
@@ -49,6 +50,9 @@ ssize_t basic_blocks_find(const char *r2bb_script, const char *bin, basic_block_
         bbs_n++;
     }
     pclose(stream);
+
+    *bbs = realloc(*bbs, bbs_n * sizeof(basic_block_t));
+    assert(*bbs != NULL);
 
     return bbs_n;
 }
