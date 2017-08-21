@@ -17,6 +17,7 @@
 #include "sections.h"
 #include "graph.h"
 #include "bb.h"
+#include "util.h"
 
 
 #define BUF_SZ              (1024 * 1024)
@@ -415,7 +416,8 @@ static int monitor_loop(monitor_t *monitor, void *receiver, bool print_seen_inpu
         seen_total++;
 
         uint64_t *buf_hash = malloc(sizeof(uint64_t));
-        *buf_hash = hashtable_hash(buf, KEY_LENGTH_VARIABLE, 42);
+        // *buf_hash = hashtable_hash(buf, KEY_LENGTH_VARIABLE, 42);
+        *buf_hash = util_CRC64(buf, size);
         uint32_t *seen_inputs_value = NULL;
         if (hashtable_get(seen_inputs_table, buf_hash, (void **) &seen_inputs_value) == CC_OK) {
             (*seen_inputs_value)++;
