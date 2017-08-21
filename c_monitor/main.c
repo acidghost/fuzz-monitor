@@ -24,6 +24,8 @@
 #define HASH_KEY_SZ         64
 #define GRAPH_NO_PRINT      ((void *) -1)
 
+#define IN_EVENT_SIZE       (sizeof(struct inotify_event) + NAME_MAX + 1)
+
 bool keep_running = true;
 
 
@@ -252,17 +254,29 @@ int cmp_uint64(const void *n1, const void *n2)
 }
 
 
-static int inotify_maybe_read(int inotify_fd, const char *path, uint8_t *buf, size_t buf_len)
+static struct inotify_event *inotify_event_new(void)
 {
-    const size_t in_event_size = sizeof(struct inotify_event) + NAME_MAX + 1;
-    struct inotify_event *in_event = malloc(in_event_size);
+    struct inotify_event *in_event = malloc(IN_EVENT_SIZE);
     assert(in_event != NULL);
-    ssize_t ret = read(inotify_fd, in_event, in_event_size);
+    return in_event;
+}
+
+
+static int inotify_maybe_read(int inotify_fd, int wd, const char *path,
+                              uint8_t *buf, size_t buf_len)
+{
+    struct inotify_event *in_event = inotify_event_new();
+    ssize_t ret = read(inotify_fd, in_event, IN_EVENT_SIZE);
     if (ret == -1) {
         free(in_event);
         if (errno == EAGAIN || errno == EWOULDBLOCK)
             return 0;
         return -1;
+    }
+
+    if (in_event->wd != wd) {
+        free(in_event);
+        return 0;
     }
 
     if ((in_event->mask & IN_DELETE_SELF) == IN_DELETE_SELF) {
@@ -271,7 +285,11 @@ static int inotify_maybe_read(int inotify_fd, const char *path, uint8_t *buf, si
         return -1;
     }
 
-    assert(in_event->len > 0);
+    if (in_event->len == 0) {
+        LOG_W("inotify event name len is zero (%" PRIx32 ")", in_event->mask);
+        free(in_event);
+        return 0;
+    }
     char file_path[PATH_MAX];
     snprintf(file_path, PATH_MAX, "%s/%s", path, in_event->name);
     free(in_event);
@@ -290,6 +308,52 @@ static int inotify_maybe_read(int inotify_fd, const char *path, uint8_t *buf, si
 }
 
 
+static int inotify_wait4_creation(int inotify_fd, const char *path)
+{
+    char *parent_path = strdup(path);
+    char *last_slash = strrchr(parent_path, '/');
+    if (last_slash == NULL) {
+        LOG_F("failed to find a '/' in %s while waiting for parent creation", parent_path);
+        free(parent_path);
+        return -1;
+    }
+    *last_slash = '\0';
+
+    int wd = inotify_add_watch(inotify_fd, parent_path, IN_CREATE);
+    if (wd == -1) {
+        PLOG_F("failed to add inotify watch to %s", parent_path);
+        free(parent_path);
+        return -1;
+    }
+
+    struct inotify_event *in_event = inotify_event_new();
+    while (1) {
+        ssize_t ret = read(inotify_fd, in_event, IN_EVENT_SIZE);
+        if (ret == -1) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                usleep(100);
+                continue;
+            }
+            break;
+        }
+
+        if ((in_event->mask & IN_CREATE) == IN_CREATE &&
+            strstr(in_event->name, last_slash + 1) != NULL) {
+            break;
+        }
+    }
+    free(in_event);
+
+    int ret = 0;
+    if (inotify_rm_watch(inotify_fd, wd) == -1) {
+        PLOG_F("failed to remove inotify watch for %s", parent_path);
+        ret = -1;
+    }
+    free(parent_path);
+    return ret;
+}
+
+
 static int monitor_loop(monitor_t *monitor, void *receiver, bool print_seen_inputs)
 {
     HashTableConf seen_inputs_table_conf;
@@ -300,16 +364,29 @@ static int monitor_loop(monitor_t *monitor, void *receiver, bool print_seen_inpu
     assert(hashtable_new_conf(&seen_inputs_table_conf, &seen_inputs_table) == CC_OK);
     double seen_avg = 0;
     size_t seen_total = 0;
+    size_t max_seen_input = 0;
 
     int ret = EXIT_SUCCESS;
     int inotify_fd = inotify_init1(IN_NONBLOCK);
     if (inotify_fd == -1) {
         PLOG_F("failed to init inotify");
-        return ret;
+        return EXIT_FAILURE;
     }
-    if (inotify_add_watch(inotify_fd, monitor->fuzz_corpus_path, IN_CLOSE_WRITE | IN_DELETE_SELF) == -1) {
-        PLOG_F("failed to add inotify watch for %s", monitor->fuzz_corpus_path);
-        return ret;
+
+    int watch_d = 0;
+    while (1) {
+        watch_d = inotify_add_watch(inotify_fd, monitor->fuzz_corpus_path, IN_CLOSE_WRITE | IN_DELETE_SELF);
+        if (watch_d == -1) {
+            if (errno == ENOENT) {
+                if (inotify_wait4_creation(inotify_fd, monitor->fuzz_corpus_path) == -1) {
+                    return EXIT_FAILURE;
+                }
+                continue;
+            }
+            PLOG_F("failed to add inotify watch for %s", monitor->fuzz_corpus_path);
+            return EXIT_FAILURE;
+        }
+        break;
     }
 
     while (keep_running) {
@@ -318,7 +395,7 @@ static int monitor_loop(monitor_t *monitor, void *receiver, bool print_seen_inpu
         int size = zmq_recv(receiver, buf, BUF_SZ, ZMQ_DONTWAIT);
         if (size == -1) {
             if (errno == EAGAIN) {
-                size = inotify_maybe_read(inotify_fd, monitor->fuzz_corpus_path, buf, BUF_SZ);
+                size = inotify_maybe_read(inotify_fd, watch_d, monitor->fuzz_corpus_path, buf, BUF_SZ);
                 if (size == -1) {
                     ret = EXIT_FAILURE;
                     break;
@@ -349,9 +426,16 @@ static int monitor_loop(monitor_t *monitor, void *receiver, bool print_seen_inpu
             *seen_inputs_value = 1;
             assert(hashtable_add(seen_inputs_table, buf_hash, seen_inputs_value) == CC_OK);
         }
+
+        if (*seen_inputs_value > max_seen_input) {
+            max_seen_input = *seen_inputs_value;
+            LOG_I("max seen value: %zu", max_seen_input);
+        }
         seen_avg = seen_total / (double) hashtable_size(seen_inputs_table);
-        if (seen_avg > 2)
+        if (seen_avg > 2) {
+            LOG_I("total seen reset (%" PRIu64 ")", monitor->input_n);
             seen_total = hashtable_size(seen_inputs_table);
+        }
 
         bts_branch_t *bts_start;
         uint64_t count;
@@ -390,7 +474,7 @@ static int monitor_loop(monitor_t *monitor, void *receiver, bool print_seen_inpu
     TableEntry *seen_inputs_entry;
     while (hashtable_iter_next(&hti, &seen_inputs_entry) != CC_ITER_END) {
         if (print_seen_inputs) {
-            LOG_I("%10" PRIx64 " %5" PRIu32,
+            LOG_I("%16" PRIx64 " %5" PRIu32,
                 *(uint64_t *) seen_inputs_entry->key,
                 *(uint32_t *) seen_inputs_entry->value);
         }
