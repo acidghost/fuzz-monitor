@@ -17,14 +17,16 @@
 #include "bb.h"
 
 
-#define BUF_SZ  (1024 * 1024)
-#define HASH_KEY_SEP "/"
-#define HASH_KEY_SZ  64
+#define BUF_SZ              (1024 * 1024)
+#define HASH_KEY_SEP        "/"
+#define HASH_KEY_SZ         64
+#define GRAPH_NO_PRINT      ((void *) -1)
 
 bool keep_running = true;
 
 
 typedef struct monitor {
+    char const ** sut;
     HashTable *branch_hits;
     section_bounds_t *sec_bounds;
     basic_block_t *bbs;
@@ -51,19 +53,22 @@ void int_sig_handler(int signum)
 void graph_print_and_free(uint64_t *from, uint64_t **connections,
                           size_t connections_size, void *fd)
 {
-    if (fd == NULL) {
-        LOG_I("0x%010" PRIx64 " %zu", *from, connections_size);
+    if (fd == NULL || fd == GRAPH_NO_PRINT) {
+        if (fd == NULL) {
+            LOG_I("0x%010" PRIx64 " %zu", *from, connections_size);
+        }
+        for (size_t i = 0; i < connections_size; i++) {
+            free(connections[i]);
+        }
     } else {
         FILE *file = (FILE *) fd;
         for (size_t i = 0; i < connections_size; i++) {
             fprintf(file, "\t\"0x%" PRIx64 "\" -> \"0x%" PRIx64 "\";\n",
                 *from, *connections[i]);
+            free(connections[i]);
         }
     }
     free(from);
-    for (size_t i = 0; i < connections_size; i++) {
-        free(connections[i]);
-    }
 }
 
 
@@ -78,6 +83,17 @@ static void free_hashtable(HashTable *table, char *graph_filename)
         }
         assert(graph_new(&graph) == CC_OK);
         fprintf(graph_file, "digraph {\n");
+    }
+
+    // this fixes a segfault when iterating an empty HashTable
+    if (hashtable_size(table) == 0) {
+        hashtable_destroy(table);
+        if (graph != NULL) {
+            fprintf(graph_file, "}\n");
+            fclose(graph_file);
+            graph_destroy(graph);
+        }
+        return;
     }
 
     HashTableIter hti;
@@ -121,25 +137,16 @@ static int process_branches(bts_branch_t *bts_start, uint64_t count, monitor_t *
     if (new_branches == NULL || filtered_count == NULL)
         return 0;
 
-    *new_branches = 0;
-    *filtered_count = 0;
+    uint64_t _new_branches = 0;
+    uint64_t _filtered_count = 0;
 
     const section_bounds_t *sec_bounds = monitor->sec_bounds;
     const uint64_t sec_start = sec_bounds ? sec_bounds->sec_start : 0;
     const uint64_t sec_end = sec_bounds ? sec_bounds->sec_end : 0;
 
     Graph *graph = NULL;
-    FILE *graph_file = NULL;
     if (monitor->graph_indiv_path != NULL) {
         assert(graph_new(&graph) == CC_OK);
-        char graph_indiv_path[PATH_MAX];
-        snprintf(graph_indiv_path, PATH_MAX, "%s/graph.%zu.gv",
-            monitor->graph_indiv_path, monitor->input_n);
-        graph_file = fopen(graph_indiv_path, "w");
-        if (graph_file == NULL) {
-            PLOG_F("filed to open file %s", graph_indiv_path);
-            return -1;
-        }
     }
 
     for (uint64_t i = 0; i < count; i++) {
@@ -154,7 +161,7 @@ static int process_branches(bts_branch_t *bts_start, uint64_t count, monitor_t *
             )
         ) continue;
 
-        (*filtered_count)++;
+        _filtered_count++;
 
         uint64_t *from_bb = malloc(sizeof(uint64_t));
         uint64_t *to_bb = malloc(sizeof(uint64_t));
@@ -197,17 +204,33 @@ static int process_branches(bts_branch_t *bts_start, uint64_t count, monitor_t *
                 LOG_F("failed to add branch [%s]", key);
                 return -1;
             }
-            (*new_branches)++;
+            _new_branches++;
         }
     }
 
     if (graph != NULL) {
-        fprintf(graph_file, "digraph {\n");
-        graph_foreach(graph, graph_file, graph_print_and_free);
-        fprintf(graph_file, "}\n");
+        if (_new_branches > 0) {
+            char graph_indiv_path[PATH_MAX];
+            snprintf(graph_indiv_path, PATH_MAX, "%s/graph.%zu.gv",
+                monitor->graph_indiv_path, monitor->input_n);
+
+            FILE *graph_file = fopen(graph_indiv_path, "w");
+            if (graph_file == NULL) {
+                PLOG_F("failed to open file %s", graph_indiv_path);
+                return -1;
+            }
+            fprintf(graph_file, "digraph {\n");
+            graph_foreach(graph, graph_file, graph_print_and_free);
+            fprintf(graph_file, "}\n");
+            fclose(graph_file);
+        } else {
+            graph_foreach(graph, GRAPH_NO_PRINT, graph_print_and_free);
+        }
         graph_destroy(graph);
-        fclose(graph_file);
     }
+
+    *new_branches = _new_branches;
+    *filtered_count = _filtered_count;
 
     return 0;
 }
@@ -226,8 +249,7 @@ int cmp_uint64(const void *n1, const void *n2)
 }
 
 
-static int monitor_loop(void *receiver, char const **argv, bool print_seen_inputs,
-                        monitor_t *monitor)
+static int monitor_loop(monitor_t *monitor, void *receiver, bool print_seen_inputs)
 {
     HashTableConf seen_inputs_table_conf;
     hashtable_conf_init(&seen_inputs_table_conf);
@@ -275,7 +297,7 @@ static int monitor_loop(void *receiver, char const **argv, bool print_seen_input
         bts_branch_t *bts_start;
         uint64_t count;
         long start_ms = get_time_ms();
-        if (perf_monitor_api(buf, size, argv, &bts_start, &count) == PERF_FAILURE) {
+        if (perf_monitor_api(buf, size, monitor->sut, &bts_start, &count) == PERF_FAILURE) {
             LOG_F("failed perf monitoring");
             ret = EXIT_FAILURE;
             break;
@@ -370,26 +392,27 @@ int main(int argc, char const *argv[])
         exit(EXIT_FAILURE);
     }
 
-    char const **sut = argv + optind;
+    monitor->sut = argv + optind;
 
     if (sec_name) {
         monitor->sec_bounds = malloc(sizeof(section_bounds_t));
         assert(monitor->sec_bounds != NULL);
-        int64_t sec_size = section_find(sut[0], sec_name, monitor->sec_bounds);
+        int64_t sec_size = section_find(monitor->sut[0], sec_name, monitor->sec_bounds);
         if (sec_size <= 0) {
             if (sec_size == 0)
-                LOG_W("%s has no %s section or it's empty", sut[0], sec_name);
+                LOG_W("%s has no %s section or it's empty", monitor->sut[0], sec_name);
             free_monitor(monitor);
             exit(EXIT_FAILURE);
         }
 
         LOG_I("monitoring on %s (%s 0x%" PRIx64 " 0x%" PRIx64 " %" PRIi64 ")",
-            sut[0], sec_name, monitor->sec_bounds->sec_start, monitor->sec_bounds->sec_end, sec_size);
+            monitor->sut[0], sec_name, monitor->sec_bounds->sec_start,
+            monitor->sec_bounds->sec_end, sec_size);
     } else {
-        LOG_I("monitoring on %s (all code)", sut[0]);
+        LOG_I("monitoring on %s (all code)", monitor->sut[0]);
     }
 
-    monitor->bbs_n = basic_blocks_find(basic_block_script, sut[0], &monitor->bbs);
+    monitor->bbs_n = basic_blocks_find(basic_block_script, monitor->sut[0], &monitor->bbs);
     if (monitor->bbs_n < 0) {
         LOG_F("failed reading basic blocks");
         free_monitor(monitor);
@@ -425,7 +448,7 @@ int main(int argc, char const *argv[])
         LOG_F("failed to create hashtable");
     } else {
         signal(SIGINT, int_sig_handler);
-        ret = monitor_loop(receiver, sut, print_seen_inputs, monitor);
+        ret = monitor_loop(monitor, receiver, print_seen_inputs);
         free_hashtable(monitor->branch_hits, graph_filename);
     }
 
