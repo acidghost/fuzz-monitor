@@ -11,6 +11,8 @@
 #include <unistd.h>
 #include <assert.h>
 #include <linux/limits.h>
+#include <sys/inotify.h>
+#include <sys/fcntl.h>
 
 #include "sections.h"
 #include "graph.h"
@@ -33,6 +35,7 @@ typedef struct monitor {
     size_t bbs_n;
     char *graph_indiv_path;
     size_t input_n;
+    char *fuzz_corpus_path;
 } monitor_t;
 
 
@@ -249,6 +252,44 @@ int cmp_uint64(const void *n1, const void *n2)
 }
 
 
+static int inotify_maybe_read(int inotify_fd, const char *path, uint8_t *buf, size_t buf_len)
+{
+    const size_t in_event_size = sizeof(struct inotify_event) + NAME_MAX + 1;
+    struct inotify_event *in_event = malloc(in_event_size);
+    assert(in_event != NULL);
+    ssize_t ret = read(inotify_fd, in_event, in_event_size);
+    if (ret == -1) {
+        free(in_event);
+        if (errno == EAGAIN || errno == EWOULDBLOCK)
+            return 0;
+        return -1;
+    }
+
+    if ((in_event->mask & IN_DELETE_SELF) == IN_DELETE_SELF) {
+        LOG_E("corpus directory %s deleted", path);
+        free(in_event);
+        return -1;
+    }
+
+    assert(in_event->len > 0);
+    char file_path[PATH_MAX];
+    snprintf(file_path, PATH_MAX, "%s/%s", path, in_event->name);
+    free(in_event);
+
+    int fd = open(file_path, O_RDONLY);
+    if (fd == -1) {
+        PLOG_F("failed to open %s", file_path);
+        return -1;
+    }
+    ret = read(fd, buf, buf_len);
+    if (ret == -1) {
+        PLOG_F("failed reading from %s", file_path);
+    }
+    close(fd);
+    return ret;
+}
+
+
 static int monitor_loop(monitor_t *monitor, void *receiver, bool print_seen_inputs)
 {
     HashTableConf seen_inputs_table_conf;
@@ -261,13 +302,31 @@ static int monitor_loop(monitor_t *monitor, void *receiver, bool print_seen_inpu
     size_t seen_total = 0;
 
     int ret = EXIT_SUCCESS;
+    int inotify_fd = inotify_init1(IN_NONBLOCK);
+    if (inotify_fd == -1) {
+        PLOG_F("failed to init inotify");
+        return ret;
+    }
+    if (inotify_add_watch(inotify_fd, monitor->fuzz_corpus_path, IN_CLOSE_WRITE | IN_DELETE_SELF) == -1) {
+        PLOG_F("failed to add inotify watch for %s", monitor->fuzz_corpus_path);
+        return ret;
+    }
+
     while (keep_running) {
+        bool from_corpus = false;
         uint8_t buf[BUF_SZ];
         int size = zmq_recv(receiver, buf, BUF_SZ, ZMQ_DONTWAIT);
         if (size == -1) {
             if (errno == EAGAIN) {
-                usleep(100);
-                continue;
+                size = inotify_maybe_read(inotify_fd, monitor->fuzz_corpus_path, buf, BUF_SZ);
+                if (size == -1) {
+                    ret = EXIT_FAILURE;
+                    break;
+                } else if (size == 0) {
+                    usleep(10);
+                    continue;
+                }
+                from_corpus = true;
             } else if (!keep_running) {
                 break;
             } else {
@@ -310,10 +369,21 @@ static int monitor_loop(monitor_t *monitor, void *receiver, bool print_seen_inpu
             break;
         }
 
-        LOG_I("%8" PRIu64 " %8" PRIu64 " %6" PRIu64 " %8ldms %6" PRIu32 " %4.3g",
-            count, filtered_count, new_branches, elapsed_ms, *seen_inputs_value, seen_avg);
+        #define LOG_IT(logfn)                                                                   \
+        logfn("%8" PRIu64 " %8" PRIu64 " %6" PRIu64 " %8ldms %6" PRIu32 " %4.3g %c",            \
+            count, filtered_count, new_branches, elapsed_ms, *seen_inputs_value, seen_avg,      \
+            from_corpus ? 'C' : 'Z');
+        if (new_branches > 0 || from_corpus) {
+            LOG_IT(LOG_I);
+        } else {
+            LOG_IT(LOG_D);
+        }
+        #undef LOG_IT
+
         monitor->input_n++;
     }
+
+    close(inotify_fd);
 
     HashTableIter hti;
     hashtable_iter_init(&hti, seen_inputs_table);
@@ -346,7 +416,7 @@ void free_monitor(monitor_t *monitor)
 void usage(const char *progname)
 {
     printf("usage: %s [-g graph.gv] [-t path] [-s .section] [-i] -b r2bb.sh "
-           "-- command [args]\n", progname);
+           "-c corpus -- command [args]\n", progname);
 }
 
 
@@ -363,7 +433,7 @@ int main(int argc, char const *argv[])
     memset(monitor, 0, sizeof(monitor_t));
 
     int opt;
-    while ((opt = getopt(argc, (char * const *) argv, "g:s:ib:t:")) != -1) {
+    while ((opt = getopt(argc, (char * const *) argv, "g:s:ib:t:c:")) != -1) {
         switch (opt) {
         case 'g':
             graph_filename = optarg;
@@ -379,6 +449,10 @@ int main(int argc, char const *argv[])
             break;
         case 't':
             monitor->graph_indiv_path = optarg;
+            break;
+        case 'c':
+            monitor->fuzz_corpus_path = optarg;
+            break;
         // default:
         //     free_monitor(monitor);
         //     usage(argv[0]);
@@ -386,7 +460,7 @@ int main(int argc, char const *argv[])
         }
     }
 
-    if (argc == optind || basic_block_script == NULL) {
+    if (argc == optind || basic_block_script == NULL || monitor->fuzz_corpus_path == NULL) {
         free_monitor(monitor);
         usage(argv[0]);
         exit(EXIT_FAILURE);
