@@ -133,7 +133,6 @@ static int process_branches(bts_branch_t *bts_start, uint64_t count, monitor_t *
     if (monitor->graph_indiv_path != NULL) {
         assert(graph_new(&graph) == CC_OK);
         char graph_indiv_path[PATH_MAX];
-        assert(strcpy(graph_indiv_path, monitor->graph_indiv_path) != NULL);
         snprintf(graph_indiv_path, PATH_MAX, "%s/graph.%zu.gv",
             monitor->graph_indiv_path, monitor->input_n);
         graph_file = fopen(graph_indiv_path, "w");
@@ -159,6 +158,8 @@ static int process_branches(bts_branch_t *bts_start, uint64_t count, monitor_t *
 
         uint64_t *from_bb = malloc(sizeof(uint64_t));
         uint64_t *to_bb = malloc(sizeof(uint64_t));
+        *from_bb = 0;
+        *to_bb = 0;
         for (size_t j = 0; j < monitor->bbs_n; j++) {
             basic_block_t bb = monitor->bbs[j];
             if (branch.from >= bb.from && branch.from < bb.to)
@@ -179,11 +180,10 @@ static int process_branches(bts_branch_t *bts_start, uint64_t count, monitor_t *
         void *key = malloc(HASH_KEY_SZ * sizeof(char));
         assert(key != NULL);
         snprintf(key, HASH_KEY_SZ, "%" PRIu64 HASH_KEY_SEP "%" PRIu64, *from_bb, *to_bb);
-        // FIXME: makes everything go bananas...
-        // if (graph == NULL) {
-        //     free(from_bb);
-        //     free(to_bb);
-        // }
+        if (graph == NULL) {
+            free(from_bb);
+            free(to_bb);
+        }
 
         uint64_t *value = NULL;
         if (hashtable_get(monitor->branch_hits, key, (void **) &value) == CC_OK) {
