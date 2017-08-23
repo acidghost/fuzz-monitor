@@ -366,6 +366,7 @@ static int monitor_loop(monitor_t *monitor, void *receiver, bool print_seen_inpu
     double seen_avg = 0;
     size_t seen_total = 0;
     size_t max_seen_input = 0;
+    uint64_t max_seen_input_k;
 
     int ret = EXIT_SUCCESS;
     int inotify_fd = inotify_init1(IN_NONBLOCK);
@@ -421,7 +422,6 @@ static int monitor_loop(monitor_t *monitor, void *receiver, bool print_seen_inpu
         uint32_t *seen_inputs_value = NULL;
         if (hashtable_get(seen_inputs_table, buf_hash, (void **) &seen_inputs_value) == CC_OK) {
             (*seen_inputs_value)++;
-            free(buf_hash);
         } else {
             seen_inputs_value = malloc(sizeof(uint32_t));
             assert(seen_inputs_value != NULL);
@@ -431,7 +431,11 @@ static int monitor_loop(monitor_t *monitor, void *receiver, bool print_seen_inpu
 
         if (*seen_inputs_value > max_seen_input) {
             max_seen_input = *seen_inputs_value;
-            LOG_I("max seen value: %zu", max_seen_input);
+            max_seen_input_k = *buf_hash;
+            // if we added buf_hash as key we must not free it
+            if (*seen_inputs_value != 1)
+                free(buf_hash);
+            LOG_I("max seen input: %16" PRIx64 " %zu", max_seen_input_k, max_seen_input);
         }
         seen_avg = seen_total / (double) hashtable_size(seen_inputs_table);
         if (seen_avg > 2) {
