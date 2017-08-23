@@ -457,9 +457,11 @@ static int monitor_loop(monitor_t *monitor, void *receiver, bool print_seen_inpu
             max_seen_input = *seen_inputs_value;
             max_seen_input_k = *buf_hash;
             // if we added buf_hash as key we must not free it
-            if (*seen_inputs_value != 1)
+            if (*seen_inputs_value > 1)
                 free(buf_hash);
             LOG_I("max seen input: %16" PRIx64 " %zu", max_seen_input_k, max_seen_input);
+        } else if (*seen_inputs_value > 1) {
+            free(buf_hash);
         }
         seen_avg = seen_total / (double) hashtable_size(seen_inputs_table);
         if (seen_avg > 2) {
