@@ -57,10 +57,13 @@ enum cc_stat graph_add(Graph *graph, uint64_t *from, uint64_t *to)
         value = NULL;
         while (list_iter_next(&edges_iter, (void **) &value) != CC_ITER_END) {
             if (*value == *to)
-                return CC_OK;
+                return CC_GRAPH_BOTH_EXIST;
         }
 
-        return list_add(from_nodes_list, to);
+        ret = list_add(from_nodes_list, to);
+        if (ret != CC_OK)
+            return ret;
+        return CC_GRAPH_FROM_EXISTS;
     }
 
     List *new_edge_list;

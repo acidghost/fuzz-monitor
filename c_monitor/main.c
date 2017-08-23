@@ -115,11 +115,24 @@ static void free_hashtable(HashTable *table, char *graph_filename)
             *from = atol(dup);
             uint64_t *to = malloc(sizeof(uint64_t));
             *to = atol(second);
-            assert(graph_add(graph, from, to) == CC_OK);
+            free(dup);
+
             fprintf(graph_file,
                 "\t\"0x%" PRIx64 "\" -> \"0x%" PRIx64 "\" [label=\"%" PRIu64 "\"];\n",
                 *from, *to, *(uint64_t *) entry->value);
-            free(dup);
+
+            switch (graph_add(graph, from, to)) {
+            case CC_GRAPH_BOTH_EXIST:
+                free(to);
+            case CC_GRAPH_FROM_EXISTS:
+                free(from);
+                break;
+            case CC_OK:
+                break;
+            default:
+                LOG_F("failed to add to graph");
+                abort();
+            }
         }
         free(entry->key);
         free(entry->value);
@@ -187,13 +200,24 @@ static int process_branches(bts_branch_t *bts_start, uint64_t count, monitor_t *
         if (*to_bb == 0)
             *to_bb = branch.to;
 
-        if (graph != NULL)
-            assert(graph_add(graph, from_bb, to_bb) == CC_OK);
-
         void *key = malloc(HASH_KEY_SZ * sizeof(char));
         assert(key != NULL);
         snprintf(key, HASH_KEY_SZ, "%" PRIu64 HASH_KEY_SEP "%" PRIu64, *from_bb, *to_bb);
-        if (graph == NULL) {
+
+        if (graph != NULL) {
+            switch (graph_add(graph, from_bb, to_bb)) {
+            case CC_GRAPH_BOTH_EXIST:
+                free(to_bb);
+            case CC_GRAPH_FROM_EXISTS:
+                free(from_bb);
+                break;
+            case CC_OK:
+                break;
+            default:
+                LOG_F("failed to add to graph");
+                abort();
+            }
+        } else {
             free(from_bb);
             free(to_bb);
         }
@@ -328,7 +352,7 @@ static int inotify_wait4_creation(int inotify_fd, const char *path)
     }
 
     struct inotify_event *in_event = inotify_event_new();
-    while (1) {
+    while (keep_running) {
         ssize_t ret = read(inotify_fd, in_event, IN_EVENT_SIZE);
         if (ret == -1) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -376,7 +400,7 @@ static int monitor_loop(monitor_t *monitor, void *receiver, bool print_seen_inpu
     }
 
     int watch_d = 0;
-    while (1) {
+    while (keep_running) {
         watch_d = inotify_add_watch(inotify_fd, monitor->fuzz_corpus_path, IN_CLOSE_WRITE | IN_DELETE_SELF);
         if (watch_d == -1) {
             if (errno == ENOENT) {

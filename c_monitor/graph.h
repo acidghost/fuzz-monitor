@@ -5,6 +5,11 @@
 #include <unistd.h>
 
 
+// beware of this...
+#define CC_GRAPH_FROM_EXISTS        CC_ERR_KEY_NOT_FOUND
+#define CC_GRAPH_BOTH_EXIST         CC_ERR_VALUE_NOT_FOUND
+
+
 typedef struct graph_s Graph;
 
 enum cc_stat graph_new(Graph **graph);
