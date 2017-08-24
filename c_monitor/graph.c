@@ -17,7 +17,7 @@ enum cc_stat graph_new(Graph **graph)
     *graph = malloc(sizeof(Graph));
     if (*graph == NULL)
         return CC_ERR_ALLOC;
-    memset(graph, 0, sizeof(Graph));
+    memset(*graph, 0, sizeof(Graph));
     enum cc_stat ret = array_new(&(*graph)->nodes);
     if (ret != CC_OK)
         return ret;
