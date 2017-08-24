@@ -151,7 +151,7 @@ static void free_hashtable(HashTable *table, char *graph_filename)
 
 
 static int process_branches(bts_branch_t *bts_start, uint64_t count, monitor_t *monitor,
-                            uint64_t *new_branches, uint64_t *filtered_count)
+                            uint64_t *new_branches, uint64_t *filtered_count, uint64_t *depth)
 {
     if (new_branches == NULL || filtered_count == NULL)
         return 0;
@@ -164,9 +164,7 @@ static int process_branches(bts_branch_t *bts_start, uint64_t count, monitor_t *
     const uint64_t sec_end = sec_bounds ? sec_bounds->sec_end : 0;
 
     Graph *graph = NULL;
-    if (monitor->graph_indiv_path != NULL) {
-        assert(graph_new(&graph) == CC_OK);
-    }
+    assert(graph_new(&graph) == CC_OK);
 
     for (uint64_t i = 0; i < count; i++) {
         bts_branch_t branch = bts_start[i];
@@ -204,22 +202,17 @@ static int process_branches(bts_branch_t *bts_start, uint64_t count, monitor_t *
         assert(key != NULL);
         snprintf(key, HASH_KEY_SZ, "%" PRIu64 HASH_KEY_SEP "%" PRIu64, *from_bb, *to_bb);
 
-        if (graph != NULL) {
-            switch (graph_add(graph, from_bb, to_bb)) {
-            case CC_GRAPH_BOTH_EXIST:
-                free(to_bb);
-            case CC_GRAPH_FROM_EXISTS:
-                free(from_bb);
-                break;
-            case CC_OK:
-                break;
-            default:
-                LOG_F("failed to add to graph");
-                abort();
-            }
-        } else {
-            free(from_bb);
+        switch (graph_add(graph, from_bb, to_bb)) {
+        case CC_GRAPH_BOTH_EXIST:
             free(to_bb);
+        case CC_GRAPH_FROM_EXISTS:
+            free(from_bb);
+            break;
+        case CC_OK:
+            break;
+        default:
+            LOG_F("failed to add to graph");
+            abort();
         }
 
         uint64_t *value = NULL;
@@ -238,26 +231,25 @@ static int process_branches(bts_branch_t *bts_start, uint64_t count, monitor_t *
         }
     }
 
-    if (graph != NULL) {
-        if (_new_branches > 0) {
-            char graph_indiv_path[PATH_MAX];
-            snprintf(graph_indiv_path, PATH_MAX, "%s/graph.%zu.gv",
-                monitor->graph_indiv_path, monitor->input_n);
+    *depth = graph_depth_conn(graph);
+    if (_new_branches > 0) {
+        char graph_indiv_path[PATH_MAX];
+        snprintf(graph_indiv_path, PATH_MAX, "%s/graph.%zu.gv",
+            monitor->graph_indiv_path, monitor->input_n);
 
-            FILE *graph_file = fopen(graph_indiv_path, "w");
-            if (graph_file == NULL) {
-                PLOG_F("failed to open file %s", graph_indiv_path);
-                return -1;
-            }
-            fprintf(graph_file, "digraph {\n");
-            graph_foreach(graph, graph_file, graph_print_and_free);
-            fprintf(graph_file, "}\n");
-            fclose(graph_file);
-        } else {
-            graph_foreach(graph, GRAPH_NO_PRINT, graph_print_and_free);
+        FILE *graph_file = fopen(graph_indiv_path, "w");
+        if (graph_file == NULL) {
+            PLOG_F("failed to open file %s", graph_indiv_path);
+            return -1;
         }
-        graph_destroy(graph);
+        fprintf(graph_file, "digraph {\n");
+        graph_foreach(graph, graph_file, graph_print_and_free);
+        fprintf(graph_file, "}\n");
+        fclose(graph_file);
+    } else {
+        graph_foreach(graph, GRAPH_NO_PRINT, graph_print_and_free);
     }
+    graph_destroy(graph);
 
     *new_branches = _new_branches;
     *filtered_count = _filtered_count;
@@ -390,7 +382,8 @@ static int monitor_loop(monitor_t *monitor, void *receiver, bool print_seen_inpu
     double seen_avg = 0;
     size_t seen_total = 0;
     size_t max_seen_input = 0;
-    uint64_t max_seen_input_k;
+    uint64_t max_seen_input_k = 0;
+    size_t max_depth = 0;
 
     int ret = EXIT_SUCCESS;
     int inotify_fd = inotify_init1(IN_NONBLOCK);
@@ -479,17 +472,23 @@ static int monitor_loop(monitor_t *monitor, void *receiver, bool print_seen_inpu
         }
         long elapsed_ms = get_time_ms() - start_ms;
 
-        uint64_t new_branches = 0, filtered_count = 0;
-        if (process_branches(bts_start, count, monitor, &new_branches, &filtered_count) == -1) {
+        uint64_t new_branches = 0, filtered_count = 0, depth = 0;
+        if (process_branches(bts_start, count, monitor, &new_branches, &filtered_count, &depth) == -1) {
             ret = EXIT_FAILURE;
             break;
         }
 
+        bool new_depth = false;
+        if (depth > max_depth) {
+            max_depth = depth;
+            new_depth = true;
+        }
+
         #define LOG_IT(logfn)                                                                   \
-        logfn("%8" PRIu64 " %8" PRIu64 " %6" PRIu64 " %8ldms %6" PRIu32 " %4.3g %c",            \
-            count, filtered_count, new_branches, elapsed_ms, *seen_inputs_value, seen_avg,      \
-            from_corpus ? 'C' : 'Z');
-        if (new_branches > 0 || from_corpus) {
+        logfn("%8" PRIu64 " %8" PRIu64 " %6" PRIu64 " %2zu /%2zu %8ldms %6" PRIu32 " %4.3g %c", \
+            count, filtered_count, new_branches, depth, max_depth, elapsed_ms,                  \
+            *seen_inputs_value, seen_avg, from_corpus ? 'C' : 'Z');
+        if (new_branches > 0 || from_corpus || new_depth) {
             LOG_IT(LOG_I);
         } else {
             LOG_IT(LOG_D);

@@ -1,6 +1,7 @@
 #include "graph.h"
 #include <list.h>
 #include <array.h>
+#include <queue.h>
 #include <assert.h>
 
 
@@ -131,4 +132,91 @@ size_t graph_edges(Graph *graph)
         counter += list_size(from_nodes_list);
     }
     return counter;
+}
+
+
+typedef struct bfs_queue_elm {
+    size_t depth;
+    size_t index;
+} bfs_queue_elm_t;
+
+
+
+ssize_t graph_find_node_index(Graph *graph, uint64_t value)
+{
+  ArrayIter nodes_iter;
+  array_iter_init(&nodes_iter, graph->nodes);
+  uint64_t *node = NULL;
+  while (array_iter_next(&nodes_iter, (void **) &node) != CC_ITER_END) {
+    if (*node == value) {
+      return array_iter_index(&nodes_iter);
+    }
+  }
+  return -1;
+}
+
+
+size_t graph_depth(Graph *graph, size_t start_idx)
+{
+    if (graph->n_nodes == 0)
+        return 0;
+
+    assert(array_size(graph->nodes) >= start_idx);
+
+    Queue *queue = NULL;
+    assert(queue_new(&queue) == CC_OK);
+    bfs_queue_elm_t *q_elm = malloc(sizeof(bfs_queue_elm_t));
+    assert(q_elm != NULL);
+    *q_elm = (bfs_queue_elm_t) { 0, start_idx };
+    assert(queue_enqueue(queue, q_elm) == CC_OK);
+
+    // actually the size of the nodes array should suffice
+    bool discovered[graph->n_nodes];
+    for (size_t i = 0; i < graph->n_nodes; i++) {
+        discovered[i] = false;
+    }
+
+    size_t max_depth = q_elm->depth;
+    while (queue_size(queue) > 0) {
+        assert(queue_poll(queue, (void **) &q_elm) == CC_OK);
+        List *edge_list = NULL;
+        assert(array_get_at(graph->edges, q_elm->index, (void **) &edge_list) == CC_OK);
+
+        ListIter edges_iter;
+        list_iter_init(&edges_iter, edge_list);
+
+        uint64_t *edge_value = NULL;
+        while (list_iter_next(&edges_iter, (void **) &edge_value) != CC_ITER_END) {
+            ssize_t idx = graph_find_node_index(graph, *edge_value);
+            if (idx != -1 && discovered[idx] == false) {
+                discovered[idx] = true;
+                bfs_queue_elm_t *q_new = malloc(sizeof(bfs_queue_elm_t));
+                assert(q_new != NULL);
+                *q_new = (bfs_queue_elm_t) { q_elm->depth + 1, idx };
+                assert(queue_enqueue(queue, q_new) == CC_OK);
+            }
+            if (q_elm->depth + 1 > max_depth)
+                max_depth = q_elm->depth + 1;
+        }
+
+        free(q_elm);
+    }
+
+    queue_destroy(queue);
+
+    return max_depth;
+}
+
+
+size_t graph_depth_conn(Graph *graph)
+{
+    size_t max_depth = 0;
+    const size_t from_size = array_size(graph->nodes);
+    for (size_t i = 0; i < from_size; i++) {
+        size_t d = graph_depth(graph, i);
+        if (d > max_depth)
+            max_depth = d;
+    }
+
+    return max_depth;
 }
