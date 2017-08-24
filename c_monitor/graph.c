@@ -8,6 +8,7 @@ struct graph_s {
     Array *nodes;       // array of nodes
     Array *edges;       // array of adjacency lists; the i-th list contains
                         // outgoing edges from i-th node in nodes
+    size_t n_nodes;     // number of vertices
 };
 
 
@@ -16,6 +17,7 @@ enum cc_stat graph_new(Graph **graph)
     *graph = malloc(sizeof(Graph));
     if (*graph == NULL)
         return CC_ERR_ALLOC;
+    memset(graph, 0, sizeof(Graph));
     enum cc_stat ret = array_new(&(*graph)->nodes);
     if (ret != CC_OK)
         return ret;
@@ -63,6 +65,7 @@ enum cc_stat graph_add(Graph *graph, uint64_t *from, uint64_t *to)
         ret = list_add(from_nodes_list, to);
         if (ret != CC_OK)
             return ret;
+        graph->n_nodes++;
         return CC_GRAPH_FROM_EXISTS;
     }
 
@@ -73,7 +76,11 @@ enum cc_stat graph_add(Graph *graph, uint64_t *from, uint64_t *to)
         return ret;
     if ((ret = array_add(graph->nodes, from)) != CC_OK)
         return ret;
-    return array_add(graph->edges, new_edge_list);
+    graph->n_nodes++;
+    if ((ret = array_add(graph->edges, new_edge_list)) != CC_OK)
+        return ret;
+    graph->n_nodes++;
+    return CC_OK;
 }
 
 
@@ -107,7 +114,7 @@ void graph_foreach(Graph *graph, void *data, void (*fn)(uint64_t *, uint64_t **,
 
 size_t graph_nodes(Graph *graph)
 {
-    return array_size(graph->nodes);
+    return graph->n_nodes;
 }
 
 
